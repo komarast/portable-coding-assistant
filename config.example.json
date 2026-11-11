@@ -1,0 +1,49 @@
+{
+  "_comment": "Copy this file to .pca.json in your workspace or home directory (%USERPROFILE%\\.pca.json on Windows AVD).",
+  "provider": "github-models",
+  "tier": "cheap",
+  "model": "",
+  "api_key": "",
+  "base_url": "",
+  "max_session_cost_usd": 0.50,
+  "max_tool_steps": 12,
+  "max_read_lines": 200,
+  "auto_approve": false,
+  "_provider_examples": {
+    "github-models": {
+      "description": "FREE ($0) with a standard GitHub Personal Access Token. Hosted on *.azure.com (usually whitelisted on corporate Azure Virtual Desktops).",
+      "base_url": "https://models.inference.ai.azure.com/chat/completions",
+      "cheap_model": "gpt-4o-mini",
+      "smart_model": "gpt-4o",
+      "env_var": "GITHUB_TOKEN"
+    },
+    "gemini": {
+      "description": "FREE ($0) on Google AI Studio Free Tier (1,500 req/day) or ultra-cheap paid tier ($0.075/1M input).",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+      "cheap_model": "gemini-2.5-flash-lite",
+      "smart_model": "gemini-2.5-flash",
+      "env_var": "GEMINI_API_KEY"
+    },
+    "openrouter": {
+      "description": "FREE ($0) using ':free' models on OpenRouter.",
+      "base_url": "https://openrouter.ai/api/v1/chat/completions",
+      "cheap_model": "qwen/qwen3-coder:free",
+      "smart_model": "deepseek/deepseek-chat-v3-0324:free",
+      "env_var": "OPENROUTER_API_KEY"
+    },
+    "groq": {
+      "description": "FREE ($0) developer tier with 500+ tok/s speed.",
+      "base_url": "https://api.groq.com/openai/v1/chat/completions",
+      "cheap_model": "llama-3.1-8b-instant",
+      "smart_model": "llama-3.3-70b-versatile",
+      "env_var": "GROQ_API_KEY"
+    },
+    "deepseek": {
+      "description": "Ultra-cheap ($0.07/1M cached input, $0.27/1M uncached input, $1.10/1M output).",
+      "base_url": "https://api.deepseek.com/chat/completions",
+      "cheap_model": "deepseek-chat",
+      "smart_model": "deepseek-reasoner",
+      "env_var": "DEEPSEEK_API_KEY"
+    }
+  }
+}
