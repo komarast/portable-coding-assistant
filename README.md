@@ -2,6 +2,8 @@
 
 A **zero-dependency, single-file agentic CLI coding assistant** designed specifically for **locked-down corporate environments** such as **Windows Azure Virtual Desktop (AVD)**, Citrix VDI, or minimal Linux VMs where **no Python, no Node.js, and no third-party libraries are installed**.
 
+> **First time using `pca`?** Start here: **[First-Time Setup Guide (2 Minutes on Windows AVD)](FIRST_TIME_SETUP.md)**
+
 ---
 
 ## Why `pca` Works on Locked-Down Windows AVD
@@ -15,6 +17,7 @@ A **zero-dependency, single-file agentic CLI coding assistant** designed specifi
 
 ## Detailed Documentation Guides
 
+- **[First-Time Setup Guide (Start Here)](FIRST_TIME_SETUP.md)** — Simple 4-step walkthrough for first-time setup on a Windows AVD.
 - **[Windows AVD & Corporate VM Deployment Guide](docs/WINDOWS_AVD_GUIDE.md)** — How to transfer `pca` onto a restricted AVD via RDP Clipboard or Base64, bypass `ExecutionPolicy` without admin rights, compile `pca.exe` locally, and handle corporate proxies/firewalls.
 - **[Cheapest & Free ($0.00) LLM Providers Guide](docs/CHEAPEST_LLM_PROVIDERS.md)** — Step-by-step instructions to get free API keys (`github-models` on `*.azure.com`, `gemini`, `openrouter`, `groq`) and ultra-cheap cached models (`deepseek`, `openai`).
 - **[UiPath Skills & Automation Guide](docs/UIPATH_SKILLS_GUIDE.md)** — How to use `pca` with UiPath Studio `.xaml` workflows, `project.json`, `inspect_xaml` (90%+ token savings on large `.xaml` files), Selectors, VB.NET/C# LINQ, and Coded Workflows.
