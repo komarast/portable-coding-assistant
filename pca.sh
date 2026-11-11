@@ -42,15 +42,15 @@ PROVIDER_CATALOG = {
         "notes": "FREE ($0) with any GitHub PAT. Hosted on *.azure.com (whitelisted on most Azure AVDs)."
     },
     "gemini": {
-        "name": "Google Gemini AI Studio (FREE Tier / Ultra-Cheap)",
+        "name": "Google Gemini AI Studio (Gemini 3.8 Flash / 3.5 Flash-Lite)",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
         "env_key": "GEMINI_API_KEY",
-        "cheap_model": "gemini-2.5-flash-lite",
-        "smart_model": "gemini-2.5-flash",
+        "cheap_model": "gemini-3.5-flash-lite",
+        "smart_model": "gemini-3.8-flash",
         "in_cost": 0.00,
         "cached_cost": 0.00,
         "out_cost": 0.00,
-        "notes": "FREE ($0) on Google AI Studio Free Tier (or $0.075/1M in on paid tier)."
+        "notes": "Supports gemini-3.8-flash & gemini-3.5-flash-lite via Google AI Studio (Free Tier or $0.75/1M intro rate)."
     },
     "openrouter": {
         "name": "OpenRouter (Free Coding Models)",

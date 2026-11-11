@@ -24,18 +24,19 @@
 
 ---
 
-### Option B: Google Gemini AI Studio (`gemini`) — *Best Free Context Window (1M Tokens)*
-- **Cost**: **$0.00 (Free)** on the Google AI Studio Free Tier (up to 1,500 requests/day on Flash-Lite/Flash).
+### Option B: Google Gemini AI Studio (`gemini`) — *Gemini 3.8 Flash & 3.5 Flash-Lite (1M Context)*
+- **Cost**: **$0.00 (Free)** on the Google AI Studio Free Tier (or introductory $0.75/1M input on paid tier for `gemini-3.8-flash`).
 - **Endpoint**: `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`
 - **Available Models**:
-  - Cheap tier (`-Tier cheap`): `gemini-2.5-flash-lite`
-  - Smart tier (`-Tier smart`): `gemini-2.5-flash` or `gemini-2.5-pro`
-- **How to get a key**:
-  1. Visit [Google AI Studio](https://aistudio.google.com/apikey) and click **Create API Key** (no credit card required for the free tier).
-  2. Set it in PowerShell:
+  - Cheap tier (`-Tier cheap`): `gemini-3.5-flash-lite`
+  - Smart tier (`-Tier smart`): **`gemini-3.8-flash`** (Google's flagship agentic software engineering Flash model)
+  - Also supports: `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-2.5-flash` via `-Model <name>`
+- **How to get a key & run `gemini-3.8-flash`**:
+  1. Visit [Google AI Studio](https://aistudio.google.com/apikey) and click **Create API Key**.
+  2. Set it in PowerShell and launch with `-Tier smart` or `-Model gemini-3.8-flash`:
      ```powershell
      $env:GEMINI_API_KEY = "AIzaSy..."
-     .\pca.cmd -Provider gemini
+     .\pca.cmd -Provider gemini -Model gemini-3.8-flash
      ```
 
 ---

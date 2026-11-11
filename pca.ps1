@@ -78,15 +78,15 @@ begin {
             Notes       = "FREE ($0) with any GitHub PAT. Hosted on *.azure.com (whitelisted on most Azure AVDs)."
         }
         "gemini" = @{
-            Name        = "Google Gemini AI Studio (FREE Tier / Ultra-Cheap)"
+            Name        = "Google Gemini AI Studio (Gemini 3.8 Flash / 3.5 Flash-Lite)"
             BaseUrl     = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
             EnvKey      = "GEMINI_API_KEY"
-            CheapModel  = "gemini-2.5-flash-lite"
-            SmartModel  = "gemini-2.5-flash"
+            CheapModel  = "gemini-3.5-flash-lite"
+            SmartModel  = "gemini-3.8-flash"
             InputCostPer1M  = 0.00
             CachedCostPer1M = 0.00
             OutputCostPer1M = 0.00
-            Notes       = "FREE ($0) on Google AI Studio Free Tier (or $0.075/1M in on paid tier)."
+            Notes       = "Supports gemini-3.8-flash & gemini-3.5-flash-lite via Google AI Studio (Free Tier or $0.75/1M intro rate)."
         }
         "openrouter" = @{
             Name        = "OpenRouter (Free Coding Models)"
