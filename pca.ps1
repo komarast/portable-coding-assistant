@@ -42,6 +42,7 @@ param(
     [switch]$CompileExe,
     [switch]$InitConfig,
     [switch]$ListProviders,
+    [switch]$TestEndpoints,
     [switch]$Help
 )
 
@@ -1049,6 +1050,210 @@ Rules for Token Efficiency:
         }
     }
 
+    function Test-SingleEndpoint {
+        param(
+            [string]$Name,
+            [string]$Url,
+            [string]$ModelName,
+            [string]$EnvKeyName
+        )
+        if ([string]::IsNullOrEmpty($Url)) {
+            return @{
+                Provider = $Name
+                Host     = "(not configured)"
+                Status   = "SKIPPED (No URL)"
+                Allowed  = $false
+                Ready    = $false
+                Ms       = 0
+                Proxy    = "-"
+                Detail   = "Set base_url in .pca.json"
+            }
+        }
+
+        $uriObj = [System.Uri]$Url
+        $hostName = $uriObj.Host
+        $proxyLabel = "Direct"
+        $sysProxy = [System.Net.WebRequest]::GetSystemWebProxy()
+        if ($null -ne $sysProxy) {
+            try {
+                $mappedProxy = $sysProxy.GetProxy($uriObj)
+                if ($null -ne $mappedProxy -and $mappedProxy.Host -ne $uriObj.Host) {
+                    $proxyLabel = "$($mappedProxy.Host):$($mappedProxy.Port)"
+                }
+            } catch {}
+        }
+
+        $keyVal = ""
+        if (-not [string]::IsNullOrEmpty($EnvKeyName)) {
+            $keyVal = [Environment]::GetEnvironmentVariable($EnvKeyName)
+        }
+        if ([string]::IsNullOrEmpty($keyVal) -and $Script:Session.Provider -eq $Name) {
+            $keyVal = $Script:Session.ApiKey
+        }
+        $hasKey = -not [string]::IsNullOrEmpty($keyVal)
+        $probeKey = if ($hasKey) { $keyVal } else { "pca-firewall-probe" }
+
+        $payload = (@{
+            model      = if ($ModelName) { $ModelName } else { "gpt-4o-mini" }
+            messages   = @(@{ role = "user"; content = "ping" })
+            max_tokens = 1
+        } | ConvertTo-Json -Depth 4 -Compress)
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        try {
+            $req = [System.Net.HttpWebRequest]::Create($Url)
+            $req.Method = "POST"
+            $req.ContentType = "application/json"
+            $req.Accept = "application/json"
+            $req.Timeout = 8000
+            $req.ReadWriteTimeout = 8000
+            $req.UserAgent = "pca-cli/$($Script:Version)"
+            if ($null -ne $sysProxy) {
+                $sysProxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials
+                $req.Proxy = $sysProxy
+            }
+            $req.Headers.Add("Authorization", "Bearer $probeKey")
+
+            $st = $req.GetRequestStream()
+            $st.Write($bytes, 0, $bytes.Length)
+            $st.Close()
+
+            $resp = $req.GetResponse()
+            $sw.Stop()
+            $ct = [string]$resp.ContentType
+            $reader = New-Object System.IO.StreamReader($resp.GetResponseStream(), [System.Text.Encoding]::UTF8)
+            $body = $reader.ReadToEnd()
+            $reader.Close()
+            $resp.Close()
+
+            if ($ct -match "text/html" -or $body -match "(?i)<html|<!doctype|zscaler|netskope|fortiguard|access denied") {
+                return @{
+                    Provider = $Name; Host = $hostName; Status = "BLOCKED (HTML Block Page)"
+                    Allowed = $false; Ready = $false; Ms = $sw.ElapsedMilliseconds; Proxy = $proxyLabel
+                    Detail = "Corporate proxy returned HTML block page instead of JSON"
+                }
+            }
+            return @{
+                Provider = $Name; Host = $hostName; Status = "ALLOWED (Key Valid & Ready)"
+                Allowed = $true; Ready = $true; Ms = $sw.ElapsedMilliseconds; Proxy = $proxyLabel
+                Detail = "HTTP 200 JSON received"
+            }
+        } catch [System.Net.WebException] {
+            $sw.Stop()
+            $wex = $_.Exception
+            $statusEnum = $wex.Status.ToString()
+
+            if ($statusEnum -match "TrustFailure|SecureChannelFailure" -or $wex.Message -match "(?i)SSL|TLS|certificate") {
+                return @{
+                    Provider = $Name; Host = $hostName; Status = "BLOCKED (SSL/TLS Cert)"
+                    Allowed = $false; Ready = $false; Ms = $sw.ElapsedMilliseconds; Proxy = $proxyLabel
+                    Detail = "Corporate TLS inspection cert error (try -SkipCertCheck)"
+                }
+            }
+
+            if ($null -ne $wex.Response) {
+                $httpResp = [System.Net.HttpWebResponse]$wex.Response
+                $code = [int]$httpResp.StatusCode
+                $ct = [string]$httpResp.ContentType
+                $errBody = ""
+                try {
+                    $er = New-Object System.IO.StreamReader($httpResp.GetResponseStream(), [System.Text.Encoding]::UTF8)
+                    $errBody = $er.ReadToEnd()
+                    $er.Close()
+                } catch {}
+
+                if ($code -eq 407) {
+                    return @{
+                        Provider = $Name; Host = $hostName; Status = "BLOCKED (407 Proxy Auth)"
+                        Allowed = $false; Ready = $false; Ms = $sw.ElapsedMilliseconds; Proxy = $proxyLabel
+                        Detail = "Corporate proxy requires authentication"
+                    }
+                }
+                if ($ct -match "text/html" -or $errBody -match "(?i)<html|<!doctype|zscaler|netskope|fortiguard|palo alto|blocked|access denied") {
+                    return @{
+                        Provider = $Name; Host = $hostName; Status = "BLOCKED (Firewall HTTP $code)"
+                        Allowed = $false; Ready = $false; Ms = $sw.ElapsedMilliseconds; Proxy = $proxyLabel
+                        Detail = "Blocked by enterprise web filter (HTML response)"
+                    }
+                }
+                if ($ct -match "json" -or $errBody.Trim().StartsWith("{") -or $code -eq 401 -or $code -eq 400 -or $code -eq 429) {
+                    $keyNote = if ($hasKey) { "HTTP $code (Check API Key / Model)" } else { "ALLOWED (Set `$$EnvKeyName to use)" }
+                    return @{
+                        Provider = $Name; Host = $hostName; Status = $keyNote
+                        Allowed = $true; Ready = $false; Ms = $sw.ElapsedMilliseconds; Proxy = $proxyLabel
+                        Detail = "Firewall open! Reached real AI API (HTTP $code JSON)"
+                    }
+                }
+                return @{
+                    Provider = $Name; Host = $hostName; Status = "BLOCKED (HTTP $code)"
+                    Allowed = $false; Ready = $false; Ms = $sw.ElapsedMilliseconds; Proxy = $proxyLabel
+                    Detail = "Unexpected HTTP $code"
+                }
+            }
+
+            return @{
+                Provider = $Name; Host = $hostName; Status = "BLOCKED ($statusEnum)"
+                Allowed = $false; Ready = $false; Ms = $sw.ElapsedMilliseconds; Proxy = $proxyLabel
+                Detail = $wex.Message
+            }
+        } catch {
+            $sw.Stop()
+            return @{
+                Provider = $Name; Host = $hostName; Status = "BLOCKED (Error)"
+                Allowed = $false; Ready = $false; Ms = $sw.ElapsedMilliseconds; Proxy = $proxyLabel
+                Detail = $_.Exception.Message
+            }
+        }
+    }
+
+    function Invoke-TestEndpoints {
+        param([string]$Target = "")
+        Write-Host ""
+        Write-Host "  Testing Enterprise Firewall & Proxy Connectivity to AI Endpoints..." -ForegroundColor Cyan
+        Write-Host "  ----------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
+        Write-Host ("  {0,-14} | {1,-34} | {2,-30} | {3,6} | {4}" -f "Provider", "Endpoint Host", "Firewall / Status", "Time", "Proxy") -ForegroundColor White
+        Write-Host "  ----------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
+
+        $targets = New-Object System.Collections.Generic.List[object]
+        if (-not [string]::IsNullOrEmpty($Target)) {
+            $tLower = $Target.ToLower()
+            if ($Script:ProviderCatalog.ContainsKey($tLower)) {
+                $p = $Script:ProviderCatalog[$tLower]
+                $targets.Add(@{ Name = $tLower; Url = $p.BaseUrl; Model = $p.CheapModel; Env = $p.EnvKey })
+            } elseif ($Target -match "^https?://") {
+                $targets.Add(@{ Name = "custom-url"; Url = $Target; Model = $Script:Session.Model; Env = "PCA_API_KEY" })
+            } else {
+                Write-Host "  Unknown provider or URL '$Target'." -ForegroundColor Red
+                return
+            }
+        } else {
+            foreach ($k in @("github-models", "gemini", "openrouter", "groq", "deepseek", "openai")) {
+                $p = $Script:ProviderCatalog[$k]
+                $targets.Add(@{ Name = $k; Url = $p.BaseUrl; Model = $p.CheapModel; Env = $p.EnvKey })
+            }
+            if (-not [string]::IsNullOrEmpty($Script:Session.BaseUrl) -and $Script:Session.Provider -eq "azure-openai") {
+                $targets.Add(@{ Name = "azure-openai"; Url = $Script:Session.BaseUrl; Model = $Script:Session.Model; Env = "AZURE_OPENAI_API_KEY" })
+            }
+        }
+
+        $allowedList = New-Object System.Collections.Generic.List[string]
+        foreach ($t in $targets) {
+            $res = Test-SingleEndpoint -Name $t.Name -Url $t.Url -ModelName $t.Model -EnvKeyName $t.Env
+            $color = if ($res.Ready) { "Green" } elseif ($res.Allowed) { "Yellow" } else { "Red" }
+            if ($res.Allowed) { $allowedList.Add($res.Provider) }
+            Write-Host ("  {0,-14} | {1,-34} | {2,-30} | {3,4}ms | {4}" -f `
+                $res.Provider, $res.Host, $res.Status, $res.Ms, $res.Proxy) -ForegroundColor $color
+        }
+        Write-Host "  ----------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
+        if ($allowedList.Count -gt 0) {
+            Write-Host ("  Recommended Allowed Providers on this machine: {0}" -f ($allowedList -join ", ")) -ForegroundColor Green
+        } else {
+            Write-Host "  All external AI endpoints were blocked. Configure an internal corporate gateway via -BaseUrl or azure-openai." -ForegroundColor Yellow
+        }
+        Write-Host ""
+    }
+
     # =========================================================================
     # Interactive Slash Commands
     # =========================================================================
@@ -1076,8 +1281,9 @@ Rules for Token Efficiency:
                 Write-Host @"
 
   Slash Commands:
+    /test [prov|url]   Test which AI endpoints are allowed through corporate firewall/proxy
     /provider [name]   List providers or switch active provider (e.g. /provider github-models)
-    /model [name]      Switch active model name (e.g. /model gpt-4o-mini)
+    /model [name]      Switch active model name (e.g. /model gemini-3.8-flash)
     /tier [cheap|smart] Switch between cheap and smart model tiers
     /skill [name|off]  Activate a domain skill (e.g. /skill uipath) or clear skills (/skill off)
     /add <file>        Pin a file to system context
@@ -1090,6 +1296,9 @@ Rules for Token Efficiency:
     /clear             Clear conversation history
     /exit              Exit PCA
 "@ -ForegroundColor Gray
+            }
+            "/test" {
+                Invoke-TestEndpoints -Target $arg
             }
             "/skill" {
                 if ([string]::IsNullOrEmpty($arg)) {
@@ -1206,6 +1415,12 @@ Rules for Token Efficiency:
 
     if ($ListProviders) {
         Show-ProvidersTable
+        return
+    }
+
+    if ($TestEndpoints) {
+        $targetArg = if ($PromptArgs -and $PromptArgs.Count -gt 0) { $PromptArgs[0] } else { "" }
+        Invoke-TestEndpoints -Target $targetArg
         return
     }
 

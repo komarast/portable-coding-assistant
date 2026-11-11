@@ -23,6 +23,15 @@ class MockLLMHandler(http.server.BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
+        if self.path == "/blocked-by-zscaler":
+            html = b"<html><body>Access Denied by Zscaler Corporate Proxy</body></html>"
+            self.send_response(403)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(html)))
+            self.end_headers()
+            self.wfile.write(html)
+            return
+
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length).decode("utf-8"))
         messages = body.get("messages", [])
@@ -88,6 +97,25 @@ class TestPortableCodingAssistant(unittest.TestCase):
         self.assertIn("openrouter", proc.stdout)
         self.assertIn("deepseek", proc.stdout)
 
+    def test_endpoint_firewall_probe_allowed_and_blocked(self):
+        allowed_url = f"http://127.0.0.1:{self.port}/v1/chat/completions"
+        proc_ok = subprocess.run(
+            [str(PCA_SH), "--test-endpoints", allowed_url],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertIn("ALLOWED", proc_ok.stdout)
+
+        blocked_url = f"http://127.0.0.1:{self.port}/blocked-by-zscaler"
+        proc_blk = subprocess.run(
+            [str(PCA_SH), "--test-endpoints", blocked_url],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertIn("BLOCKED (Firewall HTTP 403)", proc_blk.stdout)
+
     def test_agentic_read_and_search_replace_patch_loop(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
@@ -146,6 +174,8 @@ class TestPortableCodingAssistant(unittest.TestCase):
             "Invoke-ToolRunCommand",
             "Invoke-UndoLastEdit",
             "Invoke-CompileNativeExe",
+            "Test-SingleEndpoint",
+            "Invoke-TestEndpoints",
             "GetSystemWebProxy",
         ):
             self.assertIn(fn, content)

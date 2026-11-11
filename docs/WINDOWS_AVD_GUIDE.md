@@ -97,6 +97,41 @@ If an internal LLM gateway uses an untrusted self-signed certificate, pass `-Ski
 .\pca.cmd -SkipCertCheck "Hello"
 ```
 
+### Testing Which AI Endpoints Are Allowed on Your Corporate AVD (`-TestEndpoints` / `/test`)
+Before you even create an API key, you can run `pca`'s built-in **Enterprise Firewall & Proxy Probe** to see which AI providers are allowed or blocked on your corporate VM:
+
+```powershell
+# Test all built-in AI endpoints at once
+.\pca.cmd -TestEndpoints
+
+# Test a single provider or custom corporate gateway URL
+.\pca.cmd -TestEndpoints gemini
+.\pca.cmd -TestEndpoints https://my-company-gateway.internal/v1/chat/completions
+```
+*(Or type `/test` inside the interactive REPL.)*
+
+Example output on a corporate Windows AVD:
+```text
+  Testing Enterprise Firewall & Proxy Connectivity to AI Endpoints...
+  ----------------------------------------------------------------------------------------------------
+  Provider       | Endpoint Host                      | Firewall / Status              |   Time | Proxy
+  ----------------------------------------------------------------------------------------------------
+  github-models  | models.inference.ai.azure.com      | ALLOWED (Set $GITHUB_TOKEN)    |  142ms | proxy.corp:8080
+  gemini         | generativelanguage.googleapis.com  | ALLOWED (Key Valid & Ready)    |  185ms | proxy.corp:8080
+  openrouter     | openrouter.ai                      | BLOCKED (Firewall HTTP 403)    |   45ms | proxy.corp:8080
+  groq           | api.groq.com                       | BLOCKED (HTML Block Page)      |   38ms | proxy.corp:8080
+  deepseek       | api.deepseek.com                   | BLOCKED (Network/DNS)          |    9ms | proxy.corp:8080
+  openai         | api.openai.com                     | BLOCKED (Firewall HTTP 403)    |   41ms | proxy.corp:8080
+  ----------------------------------------------------------------------------------------------------
+  Recommended Allowed Providers on this machine: github-models, gemini
+```
+
+How the probe distinguishes **Allowed** vs **Blocked** (even without an API key):
+- **`ALLOWED (Key Valid & Ready)`**: Your API key is set and the endpoint returned `HTTP 200` JSON.
+- **`ALLOWED (Set $<ENV_KEY> to use)`**: The probe reached the real AI API server through your corporate firewall/proxy (received a genuine JSON response from the AI provider rather than a firewall block), so you only need to set your API key.
+- **`BLOCKED (HTML Block Page / Firewall HTTP 403)`**: A corporate web filter (Zscaler, Netskope, Palo Alto, FortiGuard) intercepted the request and returned an HTML block page.
+- **`BLOCKED (SSL/TLS Cert)`**: Corporate SSL inspection replaced the certificate with an untrusted root CA (re-run with `-SkipCertCheck -TestEndpoints`).
+
 ### Choosing an Endpoint That Passes Corporate Firewalls
 If your corporate AVD blocks consumer AI sites (`openai.com`, `openrouter.ai`, `deepseek.com`):
 - **Try `github-models` first**: Its endpoint is `https://models.inference.ai.azure.com/chat/completions`. Because it lives under **`*.azure.com`**, almost all Azure Virtual Desktop environments allow outbound HTTPS traffic to it!

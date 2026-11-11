@@ -69,6 +69,12 @@ powershell -ExecutionPolicy Bypass -File .\pca.ps1 -CompileExe
 
 ## Usage Examples
 
+### 0. Test Which AI Endpoints Pass Your Corporate Firewall (`-TestEndpoints`)
+Run this first on a corporate AVD (even before creating an API key) to see which AI endpoints are allowed through Zscaler/Netskope/corporate proxy:
+```powershell
+.\pca.cmd -TestEndpoints
+```
+
 ### 1. Interactive Agentic REPL
 ```powershell
 .\pca.cmd
@@ -103,9 +109,11 @@ export GITHUB_TOKEN="ghp_your_token_here"
 
 | Command | Description |
 | :--- | :--- |
+| `/test [prov\|url]` | Test which AI endpoints are allowed or blocked by your corporate firewall/proxy |
 | `/provider [name]` | List all free/cheap providers or switch active provider on the fly |
-| `/model [name]` | View or switch the active model ID |
+| `/model [name]` | View or switch the active model ID (e.g. `/model gemini-3.8-flash`) |
 | `/tier <cheap\|smart>` | Switch between `cheap` (fast/free) and `smart` (reasoning/frontier) models |
+| `/skill [name\|off]` | Activate a domain skill (e.g. `/skill uipath`) or turn skills off |
 | `/add <file>` | Pin a file to the cached system prompt context |
 | `/drop [file\|all]` | Unpin a file or clear all pinned files |
 | `/files` | Display workspace directory tree |

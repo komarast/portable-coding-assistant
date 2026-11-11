@@ -606,6 +606,136 @@ def run_agent_turn(user_msg: str):
         SESSION.history.append({"role": "user", "content": f"[Tool Result for {tool_obj.get('tool')}]\n{tool_out}"})
 
 
+def test_single_endpoint(name: str, url: str, model_name: str, env_key: str) -> dict:
+    import time
+    from urllib.parse import urlparse
+
+    if not url:
+        return {
+            "provider": name, "host": "(not configured)", "status": "SKIPPED (No URL)",
+            "allowed": False, "ready": False, "ms": 0, "proxy": "-"
+        }
+    parsed_uri = urlparse(url)
+    host_name = parsed_uri.netloc or url
+    proxies = urllib.request.getproxies()
+    proxy_url = proxies.get(parsed_uri.scheme) or proxies.get("https") or proxies.get("http") or "Direct"
+    if proxy_url != "Direct":
+        proxy_url = urlparse(proxy_url).netloc or proxy_url
+
+    key_val = os.environ.get(env_key, "") if env_key else ""
+    if not key_val and SESSION.provider == name:
+        key_val = SESSION.api_key
+    has_key = bool(key_val)
+    probe_key = key_val if has_key else "pca-firewall-probe"
+
+    payload = json.dumps({
+        "model": model_name or "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1
+    }).encode("utf-8")
+
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": f"pca-cli/{VERSION}",
+        "Authorization": f"Bearer {probe_key}"
+    }
+    t0 = time.time()
+    req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            ms = int((time.time() - t0) * 1000)
+            ct = resp.headers.get("Content-Type", "")
+            body = resp.read().decode("utf-8", errors="ignore")
+            if "text/html" in ct.lower() or re.search(r"(?i)<html|<!doctype|zscaler|netskope|fortiguard|access denied", body):
+                return {
+                    "provider": name, "host": host_name, "status": "BLOCKED (HTML Block Page)",
+                    "allowed": False, "ready": False, "ms": ms, "proxy": proxy_url
+                }
+            return {
+                "provider": name, "host": host_name, "status": "ALLOWED (Key Valid & Ready)",
+                "allowed": True, "ready": True, "ms": ms, "proxy": proxy_url
+            }
+    except urllib.error.HTTPError as e:
+        ms = int((time.time() - t0) * 1000)
+        code = e.code
+        ct = e.headers.get("Content-Type", "") if e.headers else ""
+        err_body = ""
+        try:
+            err_body = e.read().decode("utf-8", errors="ignore")
+        except Exception:
+            pass
+        if code == 407:
+            return {
+                "provider": name, "host": host_name, "status": "BLOCKED (407 Proxy Auth)",
+                "allowed": False, "ready": False, "ms": ms, "proxy": proxy_url
+            }
+        if "text/html" in ct.lower() or re.search(r"(?i)<html|<!doctype|zscaler|netskope|fortiguard|palo alto|blocked|access denied", err_body):
+            return {
+                "provider": name, "host": host_name, "status": f"BLOCKED (Firewall HTTP {code})",
+                "allowed": False, "ready": False, "ms": ms, "proxy": proxy_url
+            }
+        if "json" in ct.lower() or err_body.strip().startswith("{") or code in (400, 401, 429):
+            status_str = f"HTTP {code} (Check API Key)" if has_key else f"ALLOWED (Set ${env_key} to use)"
+            return {
+                "provider": name, "host": host_name, "status": status_str,
+                "allowed": True, "ready": False, "ms": ms, "proxy": proxy_url
+            }
+        return {
+            "provider": name, "host": host_name, "status": f"BLOCKED (HTTP {code})",
+            "allowed": False, "ready": False, "ms": ms, "proxy": proxy_url
+        }
+    except Exception as e:
+        ms = int((time.time() - t0) * 1000)
+        msg = str(e)
+        if re.search(r"(?i)ssl|tls|certificate", msg):
+            status_str = "BLOCKED (SSL/TLS Cert)"
+        else:
+            status_str = "BLOCKED (Network/DNS)"
+        return {
+            "provider": name, "host": host_name, "status": status_str,
+            "allowed": False, "ready": False, "ms": ms, "proxy": proxy_url
+        }
+
+
+def run_endpoint_tests(target: str = ""):
+    print("\n  Testing Enterprise Firewall & Proxy Connectivity to AI Endpoints...")
+    print("  " + "-" * 100)
+    print(f"  {'Provider':<14} | {'Endpoint Host':<34} | {'Firewall / Status':<30} | {'Time':>6} | Proxy")
+    print("  " + "-" * 100)
+
+    targets = []
+    if target:
+        t_low = target.lower()
+        if t_low in PROVIDER_CATALOG:
+            p = PROVIDER_CATALOG[t_low]
+            targets.append((t_low, p["base_url"], p["cheap_model"], p["env_key"]))
+        elif target.startswith("http://") or target.startswith("https://"):
+            targets.append(("custom-url", target, SESSION.model or "gpt-4o-mini", "PCA_API_KEY"))
+        else:
+            print(f"  Unknown provider or URL '{target}'.")
+            return
+    else:
+        for k in ("github-models", "gemini", "openrouter", "groq", "deepseek", "openai"):
+            p = PROVIDER_CATALOG[k]
+            targets.append((k, p["base_url"], p["cheap_model"], p["env_key"]))
+        if SESSION.base_url and SESSION.provider == "azure-openai":
+            targets.append(("azure-openai", SESSION.base_url, SESSION.model, "AZURE_OPENAI_API_KEY"))
+
+    allowed_list = []
+    for name, url, model_name, env_key in targets:
+        res = test_single_endpoint(name, url, model_name, env_key)
+        if res["allowed"]:
+            allowed_list.append(res["provider"])
+        print(f"  {res['provider']:<14} | {res['host']:<34} | {res['status']:<30} | {res['ms']:>4}ms | {res['proxy']}")
+
+    print("  " + "-" * 100)
+    if allowed_list:
+        print(f"  Recommended Allowed Providers on this machine: {', '.join(allowed_list)}\n")
+    else:
+        print("  All tested AI endpoints were blocked. Configure an internal corporate gateway via --base-url.\n")
+
+
 def show_providers():
     print("\n  Available Free & Ultra-Cheap LLM Providers:")
     print("  " + "-" * 82)
@@ -643,17 +773,20 @@ def load_config_and_args(argv):
             SESSION.active_skills.append(sk_lower)
 
     prompt_parts = []
+    test_endpoints_flag = False
     i = 0
     while i < len(argv):
         a = argv[i]
         if a in ("-h", "--help", "-Help"):
             print("Usage: pca [options] [prompt]")
-            print("Options: --provider <name>, --model <name>, --tier <cheap|smart>, --skill <name>, --api-key <key>, --base-url <url>, --auto-approve, --list-providers")
+            print("Options: --test-endpoints [provider|url], --provider <name>, --model <name>, --tier <cheap|smart>, --skill <name>, --api-key <key>, --base-url <url>, --auto-approve, --list-providers")
             show_providers()
             sys.exit(0)
         elif a in ("--list-providers", "-ListProviders"):
             show_providers()
             sys.exit(0)
+        elif a in ("--test-endpoints", "-TestEndpoints"):
+            test_endpoints_flag = True
         elif a in ("--provider", "-Provider") and i + 1 < len(argv):
             SESSION.provider = argv[i + 1].lower()
             i += 1
@@ -684,6 +817,11 @@ def load_config_and_args(argv):
         else:
             prompt_parts.append(a)
         i += 1
+
+    if test_endpoints_flag:
+        target_arg = prompt_parts[0] if prompt_parts else ""
+        run_endpoint_tests(target_arg)
+        sys.exit(0)
 
     # Auto-detect UiPath project
     uipath_proj = WORKSPACE / "project.json"
@@ -728,7 +866,7 @@ def main():
 
     skills_str = ", ".join(SESSION.active_skills) if SESSION.active_skills else "none"
     print(f"\n  PCA v{VERSION} - Portable Coding Assistant | Provider: {SESSION.provider} | Model: {SESSION.model} | Skills: {skills_str}")
-    print("  Type '/help' for commands, '/skill uipath' for UiPath mode, or '/exit' to quit.\n")
+    print("  Type '/help' for commands, '/test' to check firewall, '/skill uipath' for UiPath mode, or '/exit' to quit.\n")
     while True:
         try:
             line = input(f"pca ({SESSION.provider}:{SESSION.tier})> ").strip()
@@ -743,7 +881,9 @@ def main():
             if cmd in ("/exit", "/quit"):
                 break
             elif cmd == "/help":
-                print("  Commands: /provider [name], /model [name], /tier [cheap|smart], /skill [name|off], /add <file>, /drop, /files, /undo, /compact, /cost, /clear, /exit")
+                print("  Commands: /test [prov|url], /provider [name], /model [name], /tier [cheap|smart], /skill [name|off], /add <file>, /drop, /files, /undo, /compact, /cost, /clear, /exit")
+            elif cmd == "/test":
+                run_endpoint_tests(arg)
             elif cmd == "/skill":
                 if not arg:
                     print(f"  Active skills: {', '.join(SESSION.active_skills) or 'none'}")
