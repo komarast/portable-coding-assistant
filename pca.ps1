@@ -223,6 +223,51 @@ end {
     # =========================================================================
     # Configuration Loading & Saving
     # =========================================================================
+    function Get-DpapiKeyStorePath {
+        $userHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }
+        return (Join-Path $userHome ".pca.keys.dpapi.json")
+    }
+
+    function Save-EncryptedApiKey {
+        param([string]$ProviderName, [string]$PlainKey)
+        $storePath = Get-DpapiKeyStorePath
+        $store = @{}
+        if (Test-Path $storePath) {
+            try {
+                $parsed = ([System.IO.File]::ReadAllText($storePath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json)
+                foreach ($prop in $parsed.PSObject.Properties) {
+                    $store[$prop.Name] = [string]$prop.Value
+                }
+            } catch {}
+        }
+        $sec = ConvertTo-SecureString -String $PlainKey -AsPlainText -Force
+        $enc = ConvertFrom-SecureString -SecureString $sec
+        $store[$ProviderName.ToLower()] = $enc
+        $json = $store | ConvertTo-Json -Depth 3
+        [System.IO.File]::WriteAllText($storePath, $json, (New-Object System.Text.UTF8Encoding($false)))
+        Write-Host "  Saved Windows DPAPI-encrypted API key for '$ProviderName' in $storePath" -ForegroundColor Green
+    }
+
+    function Get-EncryptedApiKey {
+        param([string]$ProviderName)
+        $storePath = Get-DpapiKeyStorePath
+        if (-not (Test-Path $storePath)) { return "" }
+        try {
+            $parsed = ([System.IO.File]::ReadAllText($storePath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json)
+            $prop = $parsed.PSObject.Properties[$ProviderName.ToLower()]
+            if ($null -eq $prop -or [string]::IsNullOrEmpty([string]$prop.Value)) { return "" }
+            $sec = ConvertTo-SecureString -String ([string]$prop.Value)
+            $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+            try {
+                return [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+            } finally {
+                [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+            }
+        } catch {
+            return ""
+        }
+    }
+
     function Get-DefaultConfigPath {
         if (-not [string]::IsNullOrEmpty($ConfigPath)) { return $ConfigPath }
         $localCfg = Join-Path $Script:WorkspaceRoot ".pca.json"
@@ -263,7 +308,7 @@ end {
             }
         }
 
-        # 1. Provider resolution: CLI > Env > Config > Auto-detect from Env Keys > Default
+        # 1. Provider resolution: CLI > Env > Config > Auto-detect from Env Keys or DPAPI store > Default
         if (-not [string]::IsNullOrEmpty($Provider)) {
             $Script:Session.Provider = $Provider.ToLower()
         } elseif (-not [string]::IsNullOrEmpty($env:PCA_PROVIDER)) {
@@ -271,10 +316,11 @@ end {
         } elseif ($fileCfg -and $fileCfg.provider) {
             $Script:Session.Provider = ([string]$fileCfg.provider).ToLower()
         } else {
-            # Auto-detect whichever free/cheap key exists in environment
+            # Auto-detect whichever free/cheap key exists in environment or DPAPI store
             foreach ($key in @("github-models", "gemini", "openrouter", "groq", "deepseek", "openai")) {
                 $envName = $Script:ProviderCatalog[$key].EnvKey
                 $val = [Environment]::GetEnvironmentVariable($envName)
+                if ([string]::IsNullOrEmpty($val)) { $val = Get-EncryptedApiKey -ProviderName $key }
                 if (-not [string]::IsNullOrEmpty($val)) {
                     $Script:Session.Provider = $key
                     break
@@ -317,15 +363,20 @@ end {
             $Script:Session.BaseUrl = $cat.BaseUrl
         }
 
-        # 5. API Key resolution
+        # 5. API Key resolution (CLI > PCA_API_KEY > Provider ENV > Windows DPAPI Store > .pca.json)
         if (-not [string]::IsNullOrEmpty($ApiKey)) {
             $Script:Session.ApiKey = $ApiKey
         } elseif (-not [string]::IsNullOrEmpty($env:PCA_API_KEY)) {
             $Script:Session.ApiKey = $env:PCA_API_KEY
         } elseif ($cat -and -not [string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($cat.EnvKey))) {
             $Script:Session.ApiKey = [Environment]::GetEnvironmentVariable($cat.EnvKey)
-        } elseif ($fileCfg -and $fileCfg.api_key) {
-            $Script:Session.ApiKey = [string]$fileCfg.api_key
+        } else {
+            $dpapiKey = Get-EncryptedApiKey -ProviderName $Script:Session.Provider
+            if (-not [string]::IsNullOrEmpty($dpapiKey)) {
+                $Script:Session.ApiKey = $dpapiKey
+            } elseif ($fileCfg -and $fileCfg.api_key) {
+                $Script:Session.ApiKey = [string]$fileCfg.api_key
+            }
         }
 
         # 6. Budget & limits
@@ -1087,6 +1138,9 @@ Rules for Token Efficiency:
         if (-not [string]::IsNullOrEmpty($EnvKeyName)) {
             $keyVal = [Environment]::GetEnvironmentVariable($EnvKeyName)
         }
+        if ([string]::IsNullOrEmpty($keyVal)) {
+            $keyVal = Get-EncryptedApiKey -ProviderName $Name
+        }
         if ([string]::IsNullOrEmpty($keyVal) -and $Script:Session.Provider -eq $Name) {
             $keyVal = $Script:Session.ApiKey
         }
@@ -1282,6 +1336,7 @@ Rules for Token Efficiency:
 
   Slash Commands:
     /test [prov|url]   Test which AI endpoints are allowed through corporate firewall/proxy
+    /key [save]        Enter API key securely (masked) and optionally save encrypted via Windows DPAPI
     /provider [name]   List providers or switch active provider (e.g. /provider github-models)
     /model [name]      Switch active model name (e.g. /model gemini-3.8-flash)
     /tier [cheap|smart] Switch between cheap and smart model tiers
@@ -1299,6 +1354,25 @@ Rules for Token Efficiency:
             }
             "/test" {
                 Invoke-TestEndpoints -Target $arg
+            }
+            "/key" {
+                $secInput = Read-Host -Prompt "  Enter API key for '$($Script:Session.Provider)' (input is hidden)" -AsSecureString
+                $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secInput)
+                $plain = ""
+                try {
+                    $plain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+                } finally {
+                    [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+                }
+                if (-not [string]::IsNullOrEmpty($plain)) {
+                    $Script:Session.ApiKey = $plain
+                    Write-Host "  API key set in memory for current session." -ForegroundColor Green
+                    if ($arg.ToLower() -eq "save") {
+                        Save-EncryptedApiKey -ProviderName $Script:Session.Provider -PlainKey $plain
+                    } else {
+                        Write-Host "  (Tip: Run '/key save' to store encrypted on disk using Windows DPAPI so you never retype it.)" -ForegroundColor DarkGray
+                    }
+                }
             }
             "/skill" {
                 if ([string]::IsNullOrEmpty($arg)) {
@@ -1324,6 +1398,7 @@ Rules for Token Efficiency:
                     $Script:Session.BaseUrl = $cat.BaseUrl
                     $Script:Session.Model = if ($Script:Session.Tier -eq "smart") { $cat.SmartModel } else { $cat.CheapModel }
                     $envKeyVal = [Environment]::GetEnvironmentVariable($cat.EnvKey)
+                    if ([string]::IsNullOrEmpty($envKeyVal)) { $envKeyVal = Get-EncryptedApiKey -ProviderName $Script:Session.Provider }
                     if (-not [string]::IsNullOrEmpty($envKeyVal)) { $Script:Session.ApiKey = $envKeyVal }
                     Write-Host "  Switched provider to '$($Script:Session.Provider)' (model: $($Script:Session.Model))." -ForegroundColor Green
                 } else {

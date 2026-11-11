@@ -1,4 +1,5 @@
 .pca.json
+.pca.keys.dpapi.json
 pca.exe
 pca.pdb
 __pycache__/
