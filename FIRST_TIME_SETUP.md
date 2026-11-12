@@ -39,7 +39,7 @@ powershell -ExecutionPolicy Bypass -File .\pca.ps1 -TestEndpoints
 ```
 
 You will see a table showing which AI endpoints are **`ALLOWED`** and which are **`BLOCKED`** on your corporate network:
-- If **`github-models`** (`models.inference.ai.azure.com`) says **`ALLOWED`** -> Use a free **GitHub Token**.
+- If **`github-models`** (`models.github.ai`) says **`ALLOWED`** -> Use a free **GitHub Token**.
 - If **`gemini`** (`generativelanguage.googleapis.com`) says **`ALLOWED`** -> Use a free **Google AI Studio Key**.
 
 ---

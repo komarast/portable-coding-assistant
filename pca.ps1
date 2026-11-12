@@ -5,8 +5,8 @@
     Runs natively on stock Windows PowerShell 5.1+ (.NET Framework 4.8+) with ZERO external libraries,
     ZERO installed runtimes (no Python, no Node.js), and automatic Windows corporate proxy / Certificate Store integration.
     Supports Free ($0) and Ultra-Cheap LLM tiers:
-      - github-models (models.inference.ai.azure.com - FREE with GitHub PAT, hosted on *.azure.com)
-      - gemini        (Google AI Studio Free Tier - gemini-2.5-flash-lite / gemini-2.5-flash)
+      - github-models (models.github.ai - FREE with GitHub PAT)
+      - gemini        (Google AI Studio Free Tier - gemini-3.8-flash / gemini-3.5-flash-lite)
       - openrouter    (Free coding models: qwen/qwen3-coder:free, deepseek/deepseek-chat-v3-0324:free)
       - groq          (Free developer tier: llama-3.3-70b-versatile)
       - deepseek      (Ultra-cheap with automatic disk prompt caching: $0.07/1M cached input)
@@ -48,7 +48,7 @@ param(
 
 begin {
     $ErrorActionPreference = "Stop"
-    $Script:Version = "1.1.0"
+    $Script:Version = "1.1.1"
     $Script:StartTime = Get-Date
     $Script:WorkspaceRoot = (Get-Location).Path
     $Script:ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
@@ -68,15 +68,15 @@ begin {
     # Built-in Provider Catalog (Free & Ultra-Cheap First)
     $Script:ProviderCatalog = @{
         "github-models" = @{
-            Name        = "GitHub Models (Azure Hosted - FREE)"
-            BaseUrl     = "https://models.inference.ai.azure.com/chat/completions"
+            Name        = "GitHub Models (models.github.ai - FREE)"
+            BaseUrl     = "https://models.github.ai/inference/chat/completions"
             EnvKey      = "GITHUB_TOKEN"
-            CheapModel  = "gpt-4o-mini"
-            SmartModel  = "gpt-4o"
+            CheapModel  = "openai/gpt-4o-mini"
+            SmartModel  = "openai/gpt-4o"
             InputCostPer1M  = 0.00
             CachedCostPer1M = 0.00
             OutputCostPer1M = 0.00
-            Notes       = "FREE ($0) with any GitHub PAT. Hosted on *.azure.com (whitelisted on most Azure AVDs)."
+            Notes       = "FREE ($0) with any GitHub PAT (models:read). Hosted on models.github.ai."
         }
         "gemini" = @{
             Name        = "Google Gemini AI Studio (Gemini 3.8 Flash / 3.5 Flash-Lite)"
@@ -361,6 +361,10 @@ end {
             $Script:Session.BaseUrl = [string]$fileCfg.base_url
         } elseif ($cat) {
             $Script:Session.BaseUrl = $cat.BaseUrl
+        }
+        # Auto-migrate deprecated Azure GitHub Models hostname to models.github.ai
+        if ($Script:Session.BaseUrl -match "models\.inference\.ai\.azure\.com") {
+            $Script:Session.BaseUrl = "https://models.github.ai/inference/chat/completions"
         }
 
         # 5. API Key resolution (CLI > PCA_API_KEY > Provider ENV > Windows DPAPI Store > .pca.json)
@@ -899,11 +903,16 @@ Rules for Token Efficiency:
         if ([string]::IsNullOrEmpty($Script:Session.ApiKey) -and $Script:Session.Provider -ne "ollama") {
             $cat = $Script:ProviderCatalog[$Script:Session.Provider]
             $envHint = if ($cat) { $cat.EnvKey } else { "PCA_API_KEY" }
-            throw "Missing API Key for provider '$($Script:Session.Provider)'. Set `$env:$envHint or `$env:PCA_API_KEY, or pass -ApiKey."
+            throw "Missing API Key for provider '$($Script:Session.Provider)'. Run '/key save', set `$env:$($envHint), or pass -ApiKey."
+        }
+
+        $reqModel = $Script:Session.Model
+        if ($url -match "models\.github\.ai" -and $reqModel -notmatch "/") {
+            $reqModel = "openai/$reqModel"
         }
 
         $payloadObj = @{
-            model       = $Script:Session.Model
+            model       = $reqModel
             messages    = $Messages
             temperature = 0.1
         }
@@ -932,11 +941,11 @@ Rules for Token Efficiency:
             }
         }
 
-        $reqStream = $req.GetRequestStream()
-        $reqStream.Write($bodyBytes, 0, $bodyBytes.Length)
-        $reqStream.Close()
-
         try {
+            $reqStream = $req.GetRequestStream()
+            $reqStream.Write($bodyBytes, 0, $bodyBytes.Length)
+            $reqStream.Close()
+
             $resp = $req.GetResponse()
             $reader = New-Object System.IO.StreamReader($resp.GetResponseStream(), [System.Text.Encoding]::UTF8)
             $respText = $reader.ReadToEnd()
@@ -951,8 +960,10 @@ Rules for Token Efficiency:
                     $errReader.Close()
                     if (-not [string]::IsNullOrEmpty($errBody)) { $errMsg += " | Body: $errBody" }
                 } catch {}
+            } else {
+                $errMsg += " (Tip: Run '/test' or '.\pca.cmd -TestEndpoints' to see which AI endpoints are reachable through your firewall, or switch provider with '/provider gemini')"
             }
-            throw "LLM API HTTP Error: $errMsg"
+            throw "LLM API HTTP Error ($url): $errMsg"
         }
 
         $parsed = $respText | ConvertFrom-Json

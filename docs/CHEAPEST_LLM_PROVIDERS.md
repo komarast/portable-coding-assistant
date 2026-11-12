@@ -6,13 +6,12 @@
 
 ## 1. Free Tier Providers ($0.00 / Month)
 
-### Option A: GitHub Models (`github-models`) — *Best for Azure AVD*
-- **Cost**: **$0.00 (Free)** with any GitHub account.
-- **Endpoint**: `https://models.inference.ai.azure.com/chat/completions`
-- **Why it's #1 for Windows AVD**: Hosted on Microsoft's `*.azure.com` domain, which is almost universally whitelisted on corporate Azure Virtual Desktop firewalls.
+### Option A: GitHub Models (`github-models`) — *Free with GitHub Account*
+- **Cost**: **$0.00 (Free)** with any GitHub account (`models:read` permission on PAT).
+- **Endpoint**: `https://models.github.ai/inference/chat/completions`
 - **Available Models**:
-  - Cheap tier (`-Tier cheap`): `gpt-4o-mini`
-  - Smart tier (`-Tier smart`): `gpt-4o`, `DeepSeek-R1`, `Codestral-2501`
+  - Cheap tier (`-Tier cheap`): `openai/gpt-4o-mini`
+  - Smart tier (`-Tier smart`): `openai/gpt-4o`, `openai/gpt-4.1`
 - **How to get a key (60 seconds)**:
   1. Go to GitHub -> **Settings** -> **Developer settings** -> **Personal access tokens**.
   2. Generate a token (no special repo scopes are required for GitHub Models inference).

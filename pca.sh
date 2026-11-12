@@ -31,15 +31,15 @@ IGNORED_DIRS = {
 
 PROVIDER_CATALOG = {
     "github-models": {
-        "name": "GitHub Models (Azure Hosted - FREE)",
-        "base_url": "https://models.inference.ai.azure.com/chat/completions",
+        "name": "GitHub Models (models.github.ai - FREE)",
+        "base_url": "https://models.github.ai/inference/chat/completions",
         "env_key": "GITHUB_TOKEN",
-        "cheap_model": "gpt-4o-mini",
-        "smart_model": "gpt-4o",
+        "cheap_model": "openai/gpt-4o-mini",
+        "smart_model": "openai/gpt-4o",
         "in_cost": 0.00,
         "cached_cost": 0.00,
         "out_cost": 0.00,
-        "notes": "FREE ($0) with any GitHub PAT. Hosted on *.azure.com (whitelisted on most Azure AVDs)."
+        "notes": "FREE ($0) with any GitHub PAT (models:read). Hosted on models.github.ai."
     },
     "gemini": {
         "name": "Google Gemini AI Studio (Gemini 3.8 Flash / 3.5 Flash-Lite)",

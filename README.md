@@ -32,7 +32,7 @@ A **zero-dependency, single-file agentic CLI coding assistant** designed specifi
 
 | Provider (`-Provider`) | Default Cheap Model | Smart Model (`-Tier smart`) | Cost / 1M Tokens | Why Use It on Corporate AVD? |
 | :--- | :--- | :--- | :--- | :--- |
-| **`github-models`** *(Default)* | `gpt-4o-mini` | `gpt-4o` | **$0.00 (FREE)** | Uses any GitHub Personal Access Token (`GITHUB_TOKEN`). Hosted on **`models.inference.ai.azure.com`** (`*.azure.com`), which is almost always whitelisted on Azure AVD firewalls! |
+| **`github-models`** *(Default)* | `openai/gpt-4o-mini` | `openai/gpt-4o` | **$0.00 (FREE)** | Uses any GitHub Personal Access Token (`GITHUB_TOKEN`). Hosted on **`models.github.ai`** (`https://models.github.ai/inference/chat/completions`). |
 | **`gemini`** | `gemini-3.5-flash-lite` | `gemini-3.8-flash` | **$0.00 (FREE)** / $0.75 intro | Free tier via Google AI Studio (`GEMINI_API_KEY`) with 1M context window and `gemini-3.8-flash` agentic coding model. |
 | **`openrouter`** | `qwen/qwen3-coder:free` | `deepseek/deepseek-chat-v3-0324:free` | **$0.00 (FREE)** | Free coding models via `OPENROUTER_API_KEY`. |
 | **`groq`** | `llama-3.1-8b-instant` | `llama-3.3-70b-versatile` | **$0.00 (FREE)** | Free developer tier (`GROQ_API_KEY`) with ~500 tok/s speed. |

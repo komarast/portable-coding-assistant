@@ -116,7 +116,7 @@ Example output on a corporate Windows AVD:
   ----------------------------------------------------------------------------------------------------
   Provider       | Endpoint Host                      | Firewall / Status              |   Time | Proxy
   ----------------------------------------------------------------------------------------------------
-  github-models  | models.inference.ai.azure.com      | ALLOWED (Set $GITHUB_TOKEN)    |  142ms | proxy.corp:8080
+  github-models  | models.github.ai                   | ALLOWED (Set $GITHUB_TOKEN)    |  142ms | proxy.corp:8080
   gemini         | generativelanguage.googleapis.com  | ALLOWED (Key Valid & Ready)    |  185ms | proxy.corp:8080
   openrouter     | openrouter.ai                      | BLOCKED (Firewall HTTP 403)    |   45ms | proxy.corp:8080
   groq           | api.groq.com                       | BLOCKED (HTML Block Page)      |   38ms | proxy.corp:8080
@@ -134,6 +134,6 @@ How the probe distinguishes **Allowed** vs **Blocked** (even without an API key)
 
 ### Choosing an Endpoint That Passes Corporate Firewalls
 If your corporate AVD blocks consumer AI sites (`openai.com`, `openrouter.ai`, `deepseek.com`):
-- **Try `github-models` first**: Its endpoint is `https://models.inference.ai.azure.com/chat/completions`. Because it lives under **`*.azure.com`**, almost all Azure Virtual Desktop environments allow outbound HTTPS traffic to it!
+- **Try `github-models` first**: Its endpoint is `https://models.github.ai/inference/chat/completions`.
 - **Try `gemini` second**: Its endpoint is `https://generativelanguage.googleapis.com/...` under **`*.googleapis.com`**, which is commonly allowed when Google Workspace/Chrome is permitted.
 - **Try `azure-openai`**: If your company has an internal Azure OpenAI resource, set `base_url` in `.pca.json` to your internal endpoint.

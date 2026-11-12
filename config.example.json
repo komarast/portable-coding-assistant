@@ -11,10 +11,10 @@
   "auto_approve": false,
   "_provider_examples": {
     "github-models": {
-      "description": "FREE ($0) with a standard GitHub Personal Access Token. Hosted on *.azure.com (usually whitelisted on corporate Azure Virtual Desktops).",
-      "base_url": "https://models.inference.ai.azure.com/chat/completions",
-      "cheap_model": "gpt-4o-mini",
-      "smart_model": "gpt-4o",
+      "description": "FREE ($0) with a GitHub Personal Access Token (models:read). Hosted on models.github.ai.",
+      "base_url": "https://models.github.ai/inference/chat/completions",
+      "cheap_model": "openai/gpt-4o-mini",
+      "smart_model": "openai/gpt-4o",
       "env_var": "GITHUB_TOKEN"
     },
     "gemini": {
