@@ -71,19 +71,45 @@
 
 ---
 
-## 2. Ultra-Cheap Paid Providers ($0.02 – $0.27 per 1M Tokens)
+## 2. Anthropic Claude 5.5 Tiers (`claude` / `anthropic`) & Ultra-Cheap Paid Providers
 
-When you need unlimited rate limits without hitting free-tier quotas, these providers cost less than **$0.50 for an entire month** of daily coding:
+When you want Anthropic's industry-leading coding models or unlimited rate limits without hitting free-tier quotas, `pca` includes full native support for **Anthropic's `/v1/messages` API** with **automatic `ephemeral` prompt caching** (up to **90%–95% input token discount** on multi-turn coding sessions):
 
-| Provider | Model | Uncached Input / 1M | Cached Input / 1M | Output / 1M | Typical 20-Turn Coding Session Cost |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **`deepseek`** | `deepseek-chat` (V3) | $0.27 | **$0.07** | $1.10 | **~$0.004** (less than half a cent) |
-| **`gemini`** (Paid) | `gemini-2.5-flash-lite` | $0.075 | **$0.018** | $0.30 | **~$0.001** (one-tenth of a cent) |
-| **`openai`** | `gpt-4.1-nano` | $0.10 | **$0.025** | $0.40 | **~$0.002** |
-| **`openai`** | `gpt-4.1-mini` | $0.40 | **$0.10** | $1.60 | **~$0.008** |
+### Anthropic Claude 5.5 Model Tiers (`-Provider claude`)
+- **Endpoint**: `https://api.anthropic.com/v1/messages` (uses `x-api-key` + `anthropic-version: 2023-06-01` + automatic `cache_control: {"type": "ephemeral"}` on system prompts & skills)
+- **Three Built-In Tiers**:
+  - **`cheap` / `haiku` tier (`-Tier cheap` or `/tier haiku`)**: **`claude-haiku-5-5`** — $0.10 / 1M input (**$0.01 / 1M cached**), $0.50 / 1M output
+  - **`smart` / `sonnet` tier (`-Tier smart` or `/tier sonnet`)**: **`claude-sonnet-5-5`** — $2.00 / 1M input (**$0.10 / 1M cached**), $10.00 / 1M output
+  - **`opus` tier (`-Tier opus` or `/tier opus`)**: **`claude-opus-5-5`** — $4.00 / 1M input (**$0.20 / 1M cached**), $20.00 / 1M output
+  - *(Also supports Claude 4.5 models such as `claude-haiku-4-5`, `claude-sonnet-4-5`, `claude-opus-4-5` via `-Model <name>` or `/model <name>`)*
+- **Setup**:
+  ```powershell
+  $env:ANTHROPIC_API_KEY = "sk-ant-..."
+  powershell -ExecutionPolicy Bypass -File .\pca.ps1 -Provider claude -Tier cheap
+  ```
+  Or inside interactive mode:
+  ```text
+  pca> /provider claude
+  pca> /key save
+  pca> /tier smart      # Switches to claude-sonnet-5-5
+  pca> /tier opus       # Switches to claude-opus-5-5
+  pca> /tier cheap      # Switches to claude-haiku-5-5
+  ```
 
-### Why DeepSeek + `pca` Prompt Caching Is So Cheap
-`pca` places your static system prompt, tool definitions, and pinned files (`/add`) at the very beginning of every API request. DeepSeek's automatic context caching recognizes this prefix and charges **$0.07 per 1M tokens** (a **74% discount**) automatically on every subsequent turn in your session.
+### Paid Provider Cost Comparison (with Automatic Prompt Caching)
+
+| Provider | Tier | Model | Uncached Input / 1M | Cached Input / 1M | Output / 1M | Typical 20-Turn Coding Session Cost |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **`claude`** | `cheap` (`haiku`) | `claude-haiku-5-5` | $0.10 | **$0.01** | $0.50 | **~$0.002** (two-tenths of a cent) |
+| **`claude`** | `smart` (`sonnet`) | `claude-sonnet-5-5` | $2.00 | **$0.10** | $10.00 | **~$0.035** |
+| **`claude`** | `opus` | `claude-opus-5-5` | $4.00 | **$0.20** | $20.00 | **~$0.070** |
+| **`deepseek`** | `cheap` | `deepseek-chat` (V3) | $0.27 | **$0.07** | $1.10 | **~$0.004** (less than half a cent) |
+| **`gemini`** (Paid) | `cheap` | `gemini-3.5-flash-lite` | $0.075 | **$0.018** | $0.30 | **~$0.001** (one-tenth of a cent) |
+| **`openai`** | `cheap` | `gpt-4.1-nano` | $0.10 | **$0.025** | $0.40 | **~$0.002** |
+| **`openai`** | `smart` | `gpt-4.1-mini` | $0.40 | **$0.10** | $1.60 | **~$0.008** |
+
+### Why Claude & DeepSeek + `pca` Prompt Caching Are So Cheap
+`pca` places your static system prompt, active `SKILL.md` domain skills, tool definitions, and pinned files (`/add`) at the very beginning of every API request. For Claude, `pca` automatically attaches `cache_control: {"type": "ephemeral"}` to the system blocks, cutting input token costs by **90%–95%** on every subsequent turn in your session.
 
 ---
 

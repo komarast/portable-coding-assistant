@@ -26,20 +26,21 @@ A **zero-dependency, single-file agentic CLI coding assistant** designed specifi
 
 ---
 
-## Cheapest & Free ($0.00) LLM Providers
+## Cheapest & Free ($0.00) LLM Providers & Claude 5.5 Tiers
 
-`pca` includes built-in profiles for **4 completely free ($0.00/month)** tiers and ultra-cheap paid tiers:
+`pca` includes built-in profiles for **free ($0.00/month)** tiers, **Anthropic Claude 5.5** (`cheap` = Haiku 5.5, `smart` = Sonnet 5.5, `opus` = Opus 5.5 with automatic 90%–95% prompt caching), and ultra-cheap paid tiers:
 
-| Provider (`-Provider`) | Default Cheap Model | Smart Model (`-Tier smart`) | Cost / 1M Tokens | Why Use It on Corporate AVD? |
-| :--- | :--- | :--- | :--- | :--- |
-| **`gemini`** *(Default)* | `gemini-3.5-flash-lite` | `gemini-3.8-flash` | **$0.00 (FREE)** / $0.75 intro | Free tier via Google AI Studio (`GEMINI_API_KEY`) with 1M context window and `gemini-3.8-flash` agentic coding model. Hosted on `*.googleapis.com`. |
-| **`openrouter`** | `qwen/qwen3-coder:free` | `deepseek/deepseek-chat-v3-0324:free` | **$0.00 (FREE)** | Free coding models via `OPENROUTER_API_KEY`. |
-| **`groq`** | `llama-3.1-8b-instant` | `llama-3.3-70b-versatile` | **$0.00 (FREE)** | Free developer tier (`GROQ_API_KEY`) with ~500 tok/s speed. |
-| **`deepseek`** | `deepseek-chat` (V3) | `deepseek-reasoner` (R1) | **$0.07** cached in | Automatic disk prompt caching cuts multi-turn coding costs by 75%. |
-| **`openai`** | `gpt-4.1-nano` | `gpt-4.1-mini` | **$0.10** in (`$0.025` cached) | Ultra-low-cost OpenAI nano/mini models. |
-| **`azure-openai`** | `gpt-4o-mini` | `gpt-4o` | Corporate Gateway | Connect to your company's internal Azure OpenAI endpoint. |
-| **`ollama`** | `qwen2.5-coder:7b` | `qwen2.5-coder:14b` | **$0.00 (Local)** | 100% air-gapped local inference. |
-| ~~`github-models`~~ | `openai/gpt-4o-mini` | `openai/gpt-4o` | *Retired Jul 30, 2026* | *Note: GitHub permanently shut down the GitHub Models inference API on July 30, 2026.* |
+| Provider (`-Provider`) | Cheap (`-Tier cheap`) | Smart (`-Tier smart`) | Opus (`-Tier opus`) | Cost / 1M Tokens | Why Use It on Corporate AVD? |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`gemini`** *(Default)* | `gemini-3.5-flash-lite` | `gemini-3.8-flash` | `gemini-2.5-pro` | **$0.00 (FREE)** / $0.75 intro | Free tier via Google AI Studio (`GEMINI_API_KEY`) with 1M context window and `gemini-3.8-flash` agentic coding model. Hosted on `*.googleapis.com`. |
+| **`claude`** / `anthropic` | `claude-haiku-5-5` | `claude-sonnet-5-5` | `claude-opus-5-5` | **$0.10** Haiku (`$0.01` cached) | Native `/v1/messages` support (`ANTHROPIC_API_KEY`) with automatic `ephemeral` prompt caching (90%–95% input discount on multi-turn sessions). |
+| **`openrouter`** | `qwen/qwen3-coder:free` | `deepseek/deepseek-chat-v3-0324:free` | `anthropic/claude-opus-5.5` | **$0.00 (FREE)** | Free coding models (`:free`) or Claude/OpenAI models via `OPENROUTER_API_KEY`. |
+| **`groq`** | `llama-3.1-8b-instant` | `llama-3.3-70b-versatile` | `llama-3.3-70b-versatile` | **$0.00 (FREE)** | Free developer tier (`GROQ_API_KEY`) with ~500 tok/s speed. |
+| **`deepseek`** | `deepseek-chat` (V3) | `deepseek-reasoner` (R1) | `deepseek-reasoner` (R1) | **$0.07** cached in | Automatic disk prompt caching cuts multi-turn coding costs by 75%. |
+| **`openai`** | `gpt-4.1-nano` | `gpt-4.1-mini` | `gpt-4.1` | **$0.10** in (`$0.025` cached) | Ultra-low-cost OpenAI nano/mini/4.1 models. |
+| **`azure-openai`** | `gpt-4o-mini` | `gpt-4o` | `gpt-4o` | Corporate Gateway | Connect to your company's internal Azure OpenAI endpoint. |
+| **`ollama`** | `qwen2.5-coder:7b` | `qwen2.5-coder:14b` | `qwen2.5-coder:32b` | **$0.00 (Local)** | 100% air-gapped local inference. |
+| ~~`github-models`~~ | `openai/gpt-4o-mini` | `openai/gpt-4o` | `openai/gpt-4o` | *Retired Jul 30, 2026* | *Note: GitHub permanently shut down the GitHub Models inference API on July 30, 2026.* |
 
 ---
 
@@ -113,9 +114,9 @@ export GITHUB_TOKEN="ghp_your_token_here"
 | Command | Description |
 | :--- | :--- |
 | `/test [prov\|url]` | Test which AI endpoints are allowed or blocked by your corporate firewall/proxy |
-| `/provider [name]` | List all free/cheap providers or switch active provider on the fly |
-| `/model [name]` | View or switch the active model ID (e.g. `/model gemini-3.8-flash`) |
-| `/tier <cheap\|smart>` | Switch between `cheap` (fast/free) and `smart` (reasoning/frontier) models |
+| `/provider [name]` | List all free/cheap providers or switch active provider on the fly (e.g. `/provider claude`, `/provider gemini`) |
+| `/model [name]` | View or switch the active model ID (e.g. `/model claude-sonnet-5-5`, `/model gemini-3.8-flash`) |
+| `/tier <cheap\|smart\|opus>` | Switch between `cheap` (Haiku/Flash-Lite), `smart` (Sonnet/Flash), and `opus` (Opus/Pro) tiers |
 | `/skill [name\|off]` | Activate a domain skill (e.g. `/skill uipath`) or turn skills off |
 | `/add <file>` | Pin a file to the cached system prompt context |
 | `/drop [file\|all]` | Unpin a file or clear all pinned files |

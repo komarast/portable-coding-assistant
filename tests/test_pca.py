@@ -37,6 +37,33 @@ class MockLLMHandler(http.server.BaseHTTPRequestHandler):
         messages = body.get("messages", [])
         last_user = messages[-1]["content"] if messages else ""
 
+        if self.path == "/v1/messages":
+            # Verify Anthropic headers & payload structure
+            api_key_hdr = self.headers.get("x-api-key", "")
+            anth_ver = self.headers.get("anthropic-version", "")
+            model_used = body.get("model", "")
+            has_cache = bool(body.get("system") and body["system"][0].get("cache_control"))
+            reply = f"Claude response from {model_used} (ver={anth_ver}, cache={has_cache}, key={bool(api_key_hdr)})"
+            resp = {
+                "id": "msg_mock_claude",
+                "type": "message",
+                "role": "assistant",
+                "model": model_used,
+                "content": [{"type": "text", "text": reply}],
+                "usage": {
+                    "input_tokens": 50,
+                    "cache_read_input_tokens": 150,
+                    "output_tokens": 30,
+                },
+            }
+            raw = json.dumps(resp).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return
+
         if "Tool Result for read_file" in last_user:
             reply = (
                 "Now patching hello.txt:\n"
@@ -94,8 +121,37 @@ class TestPortableCodingAssistant(unittest.TestCase):
         )
         self.assertIn("github-models", proc.stdout)
         self.assertIn("gemini", proc.stdout)
+        self.assertIn("claude", proc.stdout)
+        self.assertIn("claude-haiku-5-5", proc.stdout)
+        self.assertIn("claude-sonnet-5-5", proc.stdout)
+        self.assertIn("claude-opus-5-5", proc.stdout)
         self.assertIn("openrouter", proc.stdout)
         self.assertIn("deepseek", proc.stdout)
+
+    def test_claude_messages_api_and_tiers(self):
+        url = f"http://127.0.0.1:{self.port}/v1/messages"
+        for tier_arg, expected_model in (
+            ("cheap", "claude-haiku-5-5"),
+            ("smart", "claude-sonnet-5-5"),
+            ("opus", "claude-opus-5-5"),
+        ):
+            proc = subprocess.run(
+                [
+                    str(PCA_SH),
+                    "--provider", "claude",
+                    "--tier", tier_arg,
+                    "--base-url", url,
+                    "--api-key", "sk-ant-test",
+                    "--no-tools",
+                    "Hello Claude",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertIn(f"Claude response from {expected_model}", proc.stdout)
+            self.assertIn("ver=2023-06-01, cache=True, key=True", proc.stdout)
+            self.assertIn("150 cached", proc.stdout)
 
     def test_endpoint_firewall_probe_allowed_and_blocked(self):
         allowed_url = f"http://127.0.0.1:{self.port}/v1/chat/completions"
@@ -162,7 +218,7 @@ class TestPortableCodingAssistant(unittest.TestCase):
     def test_powershell_script_integrity_and_ps51_compatibility(self):
         content = PCA_PS1.read_text(encoding="utf-8")
         # Ensure all core tools & providers are defined in pca.ps1
-        for provider in ("github-models", "gemini", "openrouter", "groq", "deepseek", "openai", "azure-openai", "ollama"):
+        for provider in ("github-models", "gemini", "claude", "openrouter", "groq", "deepseek", "openai", "azure-openai", "ollama"):
             self.assertIn(f'"{provider}"', content)
         for fn in (
             "Invoke-ToolListFiles",
@@ -170,6 +226,7 @@ class TestPortableCodingAssistant(unittest.TestCase):
             "Invoke-ToolReadFile",
             "Invoke-ToolInspectXaml",
             "Get-SkillContent",
+            "Get-ModelForTier",
             "Invoke-ToolEditFile",
             "Invoke-ToolRunCommand",
             "Invoke-UndoLastEdit",

@@ -29,7 +29,7 @@ param(
 
     [string]$Provider = "",
     [string]$Model = "",
-    [ValidateSet("", "cheap", "smart")]
+    [ValidateSet("", "cheap", "smart", "opus", "haiku", "sonnet")]
     [string]$Tier = "",
     [string]$ApiKey = "",
     [string]$BaseUrl = "",
@@ -48,7 +48,7 @@ param(
 
 begin {
     $ErrorActionPreference = "Stop"
-    $Script:Version = "1.1.1"
+    $Script:Version = "1.2.0"
     $Script:StartTime = Get-Date
     $Script:WorkspaceRoot = (Get-Location).Path
     $Script:ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
@@ -67,27 +67,29 @@ begin {
 
     # Built-in Provider Catalog (Free & Ultra-Cheap First)
     $Script:ProviderCatalog = @{
-        "github-models" = @{
-            Name        = "GitHub Models (RETIRED by GitHub on July 30, 2026)"
-            BaseUrl     = "https://models.github.ai/inference/chat/completions"
-            EnvKey      = "GITHUB_TOKEN"
-            CheapModel  = "openai/gpt-4o-mini"
-            SmartModel  = "openai/gpt-4o"
-            InputCostPer1M  = 0.00
-            CachedCostPer1M = 0.00
-            OutputCostPer1M = 0.00
-            Notes       = "RETIRED: GitHub shut down GitHub Models API on July 30, 2026 (returns plain 'OK'). Use gemini, openrouter, or groq instead."
-        }
         "gemini" = @{
             Name        = "Google Gemini AI Studio (Gemini 3.8 Flash / 3.5 Flash-Lite)"
             BaseUrl     = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
             EnvKey      = "GEMINI_API_KEY"
             CheapModel  = "gemini-3.5-flash-lite"
             SmartModel  = "gemini-3.8-flash"
+            OpusModel   = "gemini-3.8-flash"
             InputCostPer1M  = 0.00
             CachedCostPer1M = 0.00
             OutputCostPer1M = 0.00
             Notes       = "DEFAULT: Supports gemini-3.8-flash & gemini-3.5-flash-lite via Google AI Studio (Free Tier or $0.75/1M intro rate)."
+        }
+        "claude" = @{
+            Name        = "Anthropic Claude (Haiku 5.5 / Sonnet 5.5 / Opus 5.5)"
+            BaseUrl     = "https://api.anthropic.com/v1/messages"
+            EnvKey      = "ANTHROPIC_API_KEY"
+            CheapModel  = "claude-haiku-5-5"
+            SmartModel  = "claude-sonnet-5-5"
+            OpusModel   = "claude-opus-5-5"
+            InputCostPer1M  = 0.10
+            CachedCostPer1M = 0.01
+            OutputCostPer1M = 0.50
+            Notes       = "Claude Tiers: cheap=claude-haiku-5-5 ($0.10/1M, $0.01 cached), smart=claude-sonnet-5-5 ($2/1M), opus=claude-opus-5-5 ($4/1M)."
         }
         "openrouter" = @{
             Name        = "OpenRouter (Free Coding Models)"
@@ -95,6 +97,7 @@ begin {
             EnvKey      = "OPENROUTER_API_KEY"
             CheapModel  = "qwen/qwen3-coder:free"
             SmartModel  = "deepseek/deepseek-chat-v3-0324:free"
+            OpusModel   = "anthropic/claude-sonnet-4.5"
             InputCostPer1M  = 0.00
             CachedCostPer1M = 0.00
             OutputCostPer1M = 0.00
@@ -106,6 +109,7 @@ begin {
             EnvKey      = "GROQ_API_KEY"
             CheapModel  = "llama-3.1-8b-instant"
             SmartModel  = "llama-3.3-70b-versatile"
+            OpusModel   = "llama-3.3-70b-versatile"
             InputCostPer1M  = 0.00
             CachedCostPer1M = 0.00
             OutputCostPer1M = 0.00
@@ -117,6 +121,7 @@ begin {
             EnvKey      = "DEEPSEEK_API_KEY"
             CheapModel  = "deepseek-chat"
             SmartModel  = "deepseek-reasoner"
+            OpusModel   = "deepseek-reasoner"
             InputCostPer1M  = 0.27
             CachedCostPer1M = 0.07
             OutputCostPer1M = 1.10
@@ -128,6 +133,7 @@ begin {
             EnvKey      = "OPENAI_API_KEY"
             CheapModel  = "gpt-4.1-nano"
             SmartModel  = "gpt-4.1-mini"
+            OpusModel   = "gpt-4.1"
             InputCostPer1M  = 0.10
             CachedCostPer1M = 0.025
             OutputCostPer1M = 0.40
@@ -139,6 +145,7 @@ begin {
             EnvKey      = "AZURE_OPENAI_API_KEY"
             CheapModel  = "gpt-4o-mini"
             SmartModel  = "gpt-4o"
+            OpusModel   = "gpt-4o"
             InputCostPer1M  = 0.15
             CachedCostPer1M = 0.075
             OutputCostPer1M = 0.60
@@ -150,10 +157,23 @@ begin {
             EnvKey      = "OLLAMA_API_KEY"
             CheapModel  = "qwen2.5-coder:7b"
             SmartModel  = "qwen2.5-coder:14b"
+            OpusModel   = "qwen2.5-coder:32b"
             InputCostPer1M  = 0.00
             CachedCostPer1M = 0.00
             OutputCostPer1M = 0.00
             Notes       = "100% offline/local inference."
+        }
+        "github-models" = @{
+            Name        = "GitHub Models (RETIRED by GitHub on July 30, 2026)"
+            BaseUrl     = "https://models.github.ai/inference/chat/completions"
+            EnvKey      = "GITHUB_TOKEN"
+            CheapModel  = "openai/gpt-4o-mini"
+            SmartModel  = "openai/gpt-4o"
+            OpusModel   = "openai/gpt-4o"
+            InputCostPer1M  = 0.00
+            CachedCostPer1M = 0.00
+            OutputCostPer1M = 0.00
+            Notes       = "RETIRED: GitHub shut down GitHub Models API on July 30, 2026 (returns plain 'OK'). Use gemini, claude, openrouter, or groq instead."
         }
     }
 
@@ -296,6 +316,15 @@ end {
         Write-Host "Created configuration file at: $target" -ForegroundColor Green
     }
 
+    function Get-ModelForTier {
+        param([hashtable]$Cat, [string]$TierName)
+        if ($null -eq $Cat) { return "gemini-3.5-flash-lite" }
+        $t = if ($TierName) { $TierName.ToLower() } else { "cheap" }
+        if ($t -eq "opus" -and $Cat.OpusModel) { return $Cat.OpusModel }
+        if ($t -eq "smart" -or $t -eq "sonnet") { return $Cat.SmartModel }
+        return $Cat.CheapModel
+    }
+
     function Resolve-Configuration {
         $cfgFile = Get-DefaultConfigPath
         $fileCfg = $null
@@ -317,7 +346,7 @@ end {
             $Script:Session.Provider = ([string]$fileCfg.provider).ToLower()
         } else {
             # Auto-detect whichever free/cheap key exists in environment or DPAPI store
-            foreach ($key in @("github-models", "gemini", "openrouter", "groq", "deepseek", "openai")) {
+            foreach ($key in @("gemini", "claude", "openrouter", "groq", "deepseek", "openai")) {
                 $envName = $Script:ProviderCatalog[$key].EnvKey
                 $val = [Environment]::GetEnvironmentVariable($envName)
                 if ([string]::IsNullOrEmpty($val)) { $val = Get-EncryptedApiKey -ProviderName $key }
@@ -327,6 +356,7 @@ end {
                 }
             }
         }
+        if ($Script:Session.Provider -eq "anthropic") { $Script:Session.Provider = "claude" }
 
         # 2. Tier resolution
         if (-not [string]::IsNullOrEmpty($Tier)) {
@@ -336,6 +366,8 @@ end {
         } elseif ($fileCfg -and $fileCfg.tier) {
             $Script:Session.Tier = ([string]$fileCfg.tier).ToLower()
         }
+        if ($Script:Session.Tier -eq "haiku")  { $Script:Session.Tier = "cheap" }
+        if ($Script:Session.Tier -eq "sonnet") { $Script:Session.Tier = "smart" }
 
         $cat = $Script:ProviderCatalog[$Script:Session.Provider]
 
@@ -347,9 +379,9 @@ end {
         } elseif ($fileCfg -and $fileCfg.model) {
             $Script:Session.Model = [string]$fileCfg.model
         } elseif ($cat) {
-            $Script:Session.Model = if ($Script:Session.Tier -eq "smart") { $cat.SmartModel } else { $cat.CheapModel }
+            $Script:Session.Model = Get-ModelForTier -Cat $cat -TierName $Script:Session.Tier
         } else {
-            $Script:Session.Model = "gpt-4o-mini"
+            $Script:Session.Model = "gemini-3.5-flash-lite"
         }
 
         # 4. BaseUrl resolution
@@ -911,10 +943,40 @@ Rules for Token Efficiency:
             $reqModel = "openai/$reqModel"
         }
 
-        $payloadObj = @{
-            model       = $reqModel
-            messages    = $Messages
-            temperature = 0.1
+        $isAnthropicMessages = ($url -match "/v1/messages") -or ($Script:Session.Provider -eq "claude" -and $url -notmatch "/chat/completions")
+
+        if ($isAnthropicMessages) {
+            $sysBlocks = New-Object System.Collections.Generic.List[object]
+            $chatMsgs  = New-Object System.Collections.Generic.List[object]
+            foreach ($m in $Messages) {
+                if ($m.role -eq "system") {
+                    $sysBlocks.Add(@{
+                        type          = "text"
+                        text          = [string]$m.content
+                        cache_control = @{ type = "ephemeral" }
+                    })
+                } else {
+                    $chatMsgs.Add(@{
+                        role    = [string]$m.role
+                        content = [string]$m.content
+                    })
+                }
+            }
+            $payloadObj = @{
+                model       = $reqModel
+                max_tokens  = 4096
+                messages    = $chatMsgs.ToArray()
+                temperature = 0.1
+            }
+            if ($sysBlocks.Count -gt 0) {
+                $payloadObj["system"] = $sysBlocks.ToArray()
+            }
+        } else {
+            $payloadObj = @{
+                model       = $reqModel
+                messages    = $Messages
+                temperature = 0.1
+            }
         }
         $jsonBody = $payloadObj | ConvertTo-Json -Depth 10 -Compress
         $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($jsonBody)
@@ -934,7 +996,10 @@ Rules for Token Efficiency:
         }
 
         if (-not [string]::IsNullOrEmpty($Script:Session.ApiKey)) {
-            if ($Script:Session.Provider -eq "azure-openai" -and $url -match "openai\.azure\.com") {
+            if ($isAnthropicMessages) {
+                $req.Headers.Add("x-api-key", $Script:Session.ApiKey)
+                $req.Headers.Add("anthropic-version", "2023-06-01")
+            } elseif ($Script:Session.Provider -eq "azure-openai" -and $url -match "openai\.azure\.com") {
                 $req.Headers.Add("api-key", $Script:Session.ApiKey)
             } else {
                 $req.Headers.Add("Authorization", "Bearer $($Script:Session.ApiKey)")
@@ -966,10 +1031,24 @@ Rules for Token Efficiency:
             throw "LLM API HTTP Error ($url): $errMsg"
         }
 
+        if ([string]::IsNullOrWhiteSpace($respText) -or -not $respText.Trim().StartsWith("{")) {
+            if ($url -match "models\.github\.ai|models\.inference\.ai\.azure\.com") {
+                throw "GitHub permanently retired the GitHub Models API on July 30, 2026 (endpoint returned plain '$($respText.Trim())'). Switch to a free active provider: '/provider gemini' (Google AI Studio Free Tier), '/provider claude', '/provider openrouter', or '/provider groq'."
+            }
+            throw "LLM API returned non-JSON response from ${url}: $($respText.Substring(0, [Math]::Min(200, $respText.Length)))"
+        }
+
         $parsed = $respText | ConvertFrom-Json
         $replyText = ""
         if ($parsed.choices -and $parsed.choices.Count -gt 0) {
             $replyText = [string]$parsed.choices[0].message.content
+        } elseif ($parsed.content -and $parsed.content.Count -gt 0) {
+            # Anthropic /v1/messages content blocks
+            $textParts = New-Object System.Collections.Generic.List[string]
+            foreach ($blk in $parsed.content) {
+                if ($blk.text) { $textParts.Add([string]$blk.text) }
+            }
+            $replyText = ($textParts -join "`n")
         }
 
         # Calculate token usage & cost
@@ -982,6 +1061,17 @@ Rules for Token Efficiency:
             } elseif ($null -ne $parsed.usage.prompt_cache_hit_tokens) {
                 $cachedTok = [int]$parsed.usage.prompt_cache_hit_tokens
             }
+            # Anthropic /v1/messages usage fields
+            if ($null -ne $parsed.usage.input_tokens) {
+                $rawIn = [int]$parsed.usage.input_tokens
+                $cacheRead = if ($null -ne $parsed.usage.cache_read_input_tokens) { [int]$parsed.usage.cache_read_input_tokens } else { 0 }
+                $cacheCreate = if ($null -ne $parsed.usage.cache_creation_input_tokens) { [int]$parsed.usage.cache_creation_input_tokens } else { 0 }
+                $inTok = $rawIn + $cacheRead + $cacheCreate
+                $cachedTok = $cacheRead
+            }
+            if ($null -ne $parsed.usage.output_tokens) {
+                $outTok = [int]$parsed.usage.output_tokens
+            }
         }
         if ($inTok -eq 0)  { $inTok  = Estimate-Tokens $jsonBody }
         if ($outTok -eq 0) { $outTok = Estimate-Tokens $replyText }
@@ -990,6 +1080,20 @@ Rules for Token Efficiency:
         $inRate     = if ($cat) { [double]$cat.InputCostPer1M }  else { 0.15 }
         $cachedRate = if ($cat) { [double]$cat.CachedCostPer1M } else { 0.075 }
         $outRate    = if ($cat) { [double]$cat.OutputCostPer1M } else { 0.60 }
+
+        # Dynamic model-tier pricing for Claude Haiku 5.5 / Sonnet 5.5 / Opus 5.5
+        if ($reqModel -match "(?i)claude") {
+            if ($reqModel -match "(?i)opus") {
+                $inRate = 4.00; $cachedRate = 0.20; $outRate = 20.00
+            } elseif ($reqModel -match "(?i)sonnet") {
+                $inRate = 2.00; $cachedRate = 0.10; $outRate = 10.00
+            } elseif ($reqModel -match "(?i)haiku-4") {
+                $inRate = 1.00; $cachedRate = 0.10; $outRate = 5.00
+            } else {
+                # claude-haiku-5-5 default ($0.10/1M in, $0.01/1M cached, $0.50/1M out)
+                $inRate = 0.10; $cachedRate = 0.01; $outRate = 0.50
+            }
+        }
 
         $uncachedIn = [Math]::Max(0, $inTok - $cachedTok)
         $turnCost = (($uncachedIn / 1000000.0) * $inRate) + (($cachedTok / 1000000.0) * $cachedRate) + (($outTok / 1000000.0) * $outRate)
@@ -1178,7 +1282,12 @@ Rules for Token Efficiency:
                 $sysProxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials
                 $req.Proxy = $sysProxy
             }
-            $req.Headers.Add("Authorization", "Bearer $probeKey")
+            if ($Url -match "/v1/messages$" -or $Name -eq "claude" -or $Name -eq "anthropic") {
+                $req.Headers.Add("x-api-key", $probeKey)
+                $req.Headers.Add("anthropic-version", "2023-06-01")
+            } else {
+                $req.Headers.Add("Authorization", "Bearer $probeKey")
+            }
 
             $st = $req.GetRequestStream()
             $st.Write($bytes, 0, $bytes.Length)
@@ -1291,6 +1400,7 @@ Rules for Token Efficiency:
         $targets = New-Object System.Collections.Generic.List[object]
         if (-not [string]::IsNullOrEmpty($Target)) {
             $tLower = $Target.ToLower()
+            if ($tLower -eq "anthropic") { $tLower = "claude" }
             if ($Script:ProviderCatalog.ContainsKey($tLower)) {
                 $p = $Script:ProviderCatalog[$tLower]
                 $targets.Add(@{ Name = $tLower; Url = $p.BaseUrl; Model = $p.CheapModel; Env = $p.EnvKey })
@@ -1301,7 +1411,7 @@ Rules for Token Efficiency:
                 return
             }
         } else {
-            foreach ($k in @("github-models", "gemini", "openrouter", "groq", "deepseek", "openai")) {
+            foreach ($k in @("gemini", "claude", "openrouter", "groq", "deepseek", "openai", "github-models")) {
                 $p = $Script:ProviderCatalog[$k]
                 $targets.Add(@{ Name = $k; Url = $p.BaseUrl; Model = $p.CheapModel; Env = $p.EnvKey })
             }
@@ -1332,13 +1442,13 @@ Rules for Token Efficiency:
     # =========================================================================
     function Show-ProvidersTable {
         Write-Host ""
-        Write-Host "  Available Free & Ultra-Cheap LLM Providers:" -ForegroundColor Cyan
-        Write-Host "  -----------------------------------------------------------------------------------" -ForegroundColor DarkGray
-        foreach ($k in @("github-models", "gemini", "openrouter", "groq", "deepseek", "openai", "azure-openai", "ollama")) {
+        Write-Host "  Available Free & Ultra-Cheap LLM Providers (Tiers: cheap | smart | opus):" -ForegroundColor Cyan
+        Write-Host "  ------------------------------------------------------------------------------------------------------" -ForegroundColor DarkGray
+        foreach ($k in @("gemini", "claude", "openrouter", "groq", "deepseek", "openai", "azure-openai", "ollama", "github-models")) {
             $p = $Script:ProviderCatalog[$k]
             $active = if ($Script:Session.Provider -eq $k) { "*" } else { " " }
-            Write-Host ("  [{0}] {1,-14} | Cheap: {2,-26} | Env: {3}" -f $active, $k, $p.CheapModel, $p.EnvKey) -ForegroundColor White
-            Write-Host ("      {0}" -f $p.Notes) -ForegroundColor DarkGray
+            Write-Host ("  [{0}] {1,-14} | Cheap: {2,-22} | Smart: {3,-22} | Opus: {4}" -f $active, $k, $p.CheapModel, $p.SmartModel, $p.OpusModel) -ForegroundColor White
+            Write-Host ("      Env: {0,-21} | {1}" -f $p.EnvKey, $p.Notes) -ForegroundColor DarkGray
         }
         Write-Host ""
     }
@@ -1354,21 +1464,21 @@ Rules for Token Efficiency:
                 Write-Host @"
 
   Slash Commands:
-    /test [prov|url]   Test which AI endpoints are allowed through corporate firewall/proxy
-    /key [save]        Enter API key securely (masked) and optionally save encrypted via Windows DPAPI
-    /provider [name]   List providers or switch active provider (e.g. /provider github-models)
-    /model [name]      Switch active model name (e.g. /model gemini-3.8-flash)
-    /tier [cheap|smart] Switch between cheap and smart model tiers
-    /skill [name|off]  Activate a domain skill (e.g. /skill uipath) or clear skills (/skill off)
-    /add <file>        Pin a file to system context
-    /drop [file|all]   Unpin a file or clear all pinned files
-    /files             List workspace files
-    /undo              Revert the most recent file edit or creation
-    /compact           Compress older conversation history to save tokens
-    /cost              Show session token and USD cost breakdown
-    /init              Create a default .pca.json config file in current workspace
-    /clear             Clear conversation history
-    /exit              Exit PCA
+    /test [prov|url]        Test which AI endpoints are allowed through corporate firewall/proxy
+    /key [save]             Enter API key securely (masked) and optionally save encrypted via Windows DPAPI
+    /provider [name]        List providers or switch active provider (e.g. /provider claude, /provider gemini)
+    /model [name]           Switch active model name (e.g. /model claude-sonnet-5-5)
+    /tier [cheap|smart|opus] Switch between cheap (Haiku/Flash), smart (Sonnet/Pro), and opus tiers
+    /skill [name|off]       Activate a domain skill (e.g. /skill uipath) or clear skills (/skill off)
+    /add <file>             Pin a file to system context
+    /drop [file|all]        Unpin a file or clear all pinned files
+    /files                  List workspace files
+    /undo                   Revert the most recent file edit or creation
+    /compact                Compress older conversation history to save tokens
+    /cost                   Show session token and USD cost breakdown
+    /init                   Create a default .pca.json config file in current workspace
+    /clear                  Clear conversation history
+    /exit                   Exit PCA
 "@ -ForegroundColor Gray
             }
             "/test" {
@@ -1409,13 +1519,15 @@ Rules for Token Efficiency:
                 }
             }
             "/provider" {
-                if ([string]::IsNullOrEmpty($arg)) {
+                $pArg = $arg.ToLower()
+                if ($pArg -eq "anthropic") { $pArg = "claude" }
+                if ([string]::IsNullOrEmpty($pArg)) {
                     Show-ProvidersTable
-                } elseif ($Script:ProviderCatalog.ContainsKey($arg.ToLower())) {
-                    $Script:Session.Provider = $arg.ToLower()
+                } elseif ($Script:ProviderCatalog.ContainsKey($pArg)) {
+                    $Script:Session.Provider = $pArg
                     $cat = $Script:ProviderCatalog[$Script:Session.Provider]
                     $Script:Session.BaseUrl = $cat.BaseUrl
-                    $Script:Session.Model = if ($Script:Session.Tier -eq "smart") { $cat.SmartModel } else { $cat.CheapModel }
+                    $Script:Session.Model = Get-ModelForTier -CatalogEntry $cat -TierName $Script:Session.Tier
                     $envKeyVal = [Environment]::GetEnvironmentVariable($cat.EnvKey)
                     if ([string]::IsNullOrEmpty($envKeyVal)) { $envKeyVal = Get-EncryptedApiKey -ProviderName $Script:Session.Provider }
                     if (-not [string]::IsNullOrEmpty($envKeyVal)) { $Script:Session.ApiKey = $envKeyVal }
@@ -1433,15 +1545,16 @@ Rules for Token Efficiency:
                 }
             }
             "/tier" {
-                if ($arg -eq "cheap" -or $arg -eq "smart") {
-                    $Script:Session.Tier = $arg
+                $tArg = $arg.ToLower()
+                if ($tArg -in @("cheap", "smart", "opus", "haiku", "sonnet")) {
+                    $Script:Session.Tier = if ($tArg -eq "haiku") { "cheap" } elseif ($tArg -eq "sonnet") { "smart" } else { $tArg }
                     $cat = $Script:ProviderCatalog[$Script:Session.Provider]
                     if ($cat) {
-                        $Script:Session.Model = if ($arg -eq "smart") { $cat.SmartModel } else { $cat.CheapModel }
+                        $Script:Session.Model = Get-ModelForTier -CatalogEntry $cat -TierName $Script:Session.Tier
                     }
-                    Write-Host "  Switched tier to '$arg' (model: $($Script:Session.Model))." -ForegroundColor Green
+                    Write-Host "  Switched tier to '$($Script:Session.Tier)' (model: $($Script:Session.Model))." -ForegroundColor Green
                 } else {
-                    Write-Host "  Usage: /tier cheap  OR  /tier smart" -ForegroundColor Yellow
+                    Write-Host "  Usage: /tier cheap (haiku)  |  /tier smart (sonnet)  |  /tier opus" -ForegroundColor Yellow
                 }
             }
             "/add" {

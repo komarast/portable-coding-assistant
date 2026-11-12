@@ -40,16 +40,18 @@ powershell -ExecutionPolicy Bypass -File .\pca.ps1 -TestEndpoints
 
 You will see a table showing which AI endpoints are **`ALLOWED`** and which are **`BLOCKED`** on your corporate network:
 - If **`gemini`** (`generativelanguage.googleapis.com`) says **`ALLOWED`** -> Use a free **Google AI Studio Key** (`GEMINI_API_KEY`).
+- If **`claude`** (`api.anthropic.com`) says **`ALLOWED`** -> Use an **Anthropic Claude Key** (`ANTHROPIC_API_KEY`) with `cheap` (`claude-haiku-5-5`), `smart` (`claude-sonnet-5-5`), or `opus` (`claude-opus-5-5`).
 - If **`openrouter`** (`openrouter.ai`) says **`ALLOWED`** -> Use a free **OpenRouter Key** (`OPENROUTER_API_KEY`).
 - If **`groq`** (`api.groq.com`) says **`ALLOWED`** -> Use a free **Groq Developer Key** (`GROQ_API_KEY`).
 *(Note: GitHub permanently retired the free `github-models` API on July 30, 2026.)*
 
 ---
 
-## Step 3: Get a Free ($0.00) API Key & Save It Securely
+## Step 3: Get an API Key & Save It Securely
 
-1. Get a free key (you can generate this on your personal PC or phone if your AVD browser blocks sign-up pages):
+1. Get an API key (you can generate this on your personal PC or phone if your AVD browser blocks sign-up pages):
    - **For `gemini` (Default — Free / Gemini 3.8 Flash)**: Go to [aistudio.google.com/apikey](https://aistudio.google.com/apikey) -> Click **Create API Key** (`AIzaSy...`).
+   - **For `claude` (Anthropic Claude 5.5 Haiku / Sonnet / Opus)**: Go to [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) -> Click **Create Key** (`sk-ant-...`).
    - **For `openrouter` (Free coding models)**: Go to [openrouter.ai/keys](https://openrouter.ai/keys) -> Click **Create Key** (`sk-or-v1-...`).
    - **For `groq` (Free developer tier)**: Go to [console.groq.com/keys](https://console.groq.com/keys) -> Click **Create API Key** (`gsk_...`).
 
@@ -60,11 +62,11 @@ You will see a table showing which AI endpoints are **`ALLOWED`** and which are 
 
 3. Inside the `pca>` prompt, select your allowed provider and save your API key (encrypted with Windows DPAPI so you never have to type it again):
    ```text
-   pca> /provider gemini
+   pca> /provider claude
    pca> /key save
-   Enter API key for 'gemini' (input is hidden): ********************
+   Enter API key for 'claude' (input is hidden): ********************
    ```
-   *(Or for OpenRouter / Groq, run `/provider openrouter` or `/provider groq` and then `/key save`.)*
+   *(Or for Gemini / OpenRouter / Groq, run `/provider gemini`, `/provider openrouter`, or `/provider groq` and then `/key save`.)*
 
 ---
 
@@ -82,9 +84,11 @@ powershell -ExecutionPolicy Bypass -File $HOME\pca\pca.ps1
   ```text
   pca> Explain the structure of this project and what Main.xaml does
   ```
-- **Switch to Gemini 3.8 Flash (`smart` tier)**:
+- **Switch between Model Tiers (`cheap`, `smart`, `opus`)**:
   ```text
-  pca> /tier smart
+  pca> /tier cheap     # claude-haiku-5-5  or gemini-3.5-flash-lite
+  pca> /tier smart     # claude-sonnet-5-5 or gemini-3.8-flash
+  pca> /tier opus      # claude-opus-5-5   or gemini-2.5-pro
   ```
 - **Edit code or fix a bug**:
   ```text

@@ -21,7 +21,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 WORKSPACE = Path.cwd().resolve()
 SCRIPT_DIR = Path(os.environ.get("PCA_SCRIPT_DIR", str(WORKSPACE))).resolve()
 IGNORED_DIRS = {
@@ -36,21 +36,35 @@ PROVIDER_CATALOG = {
         "env_key": "GEMINI_API_KEY",
         "cheap_model": "gemini-3.5-flash-lite",
         "smart_model": "gemini-3.8-flash",
+        "opus_model": "gemini-2.5-pro",
         "in_cost": 0.00,
         "cached_cost": 0.00,
         "out_cost": 0.00,
         "notes": "DEFAULT: Supports gemini-3.8-flash & gemini-3.5-flash-lite via Google AI Studio (Free Tier or $0.75/1M intro rate)."
     },
+    "claude": {
+        "name": "Anthropic Claude 5.5 (Haiku / Sonnet / Opus)",
+        "base_url": "https://api.anthropic.com/v1/messages",
+        "env_key": "ANTHROPIC_API_KEY",
+        "cheap_model": "claude-haiku-5-5",
+        "smart_model": "claude-sonnet-5-5",
+        "opus_model": "claude-opus-5-5",
+        "in_cost": 0.10,
+        "cached_cost": 0.01,
+        "out_cost": 0.50,
+        "notes": "Tiers: cheap=claude-haiku-5-5 ($0.10/$0.50), smart=claude-sonnet-5-5 ($2/$10), opus=claude-opus-5-5 ($4/$20). Auto prompt caching."
+    },
     "openrouter": {
-        "name": "OpenRouter (Free Coding Models)",
+        "name": "OpenRouter (Free Coding Models + Claude)",
         "base_url": "https://openrouter.ai/api/v1/chat/completions",
         "env_key": "OPENROUTER_API_KEY",
         "cheap_model": "qwen/qwen3-coder:free",
         "smart_model": "deepseek/deepseek-chat-v3-0324:free",
+        "opus_model": "anthropic/claude-opus-5.5",
         "in_cost": 0.00,
         "cached_cost": 0.00,
         "out_cost": 0.00,
-        "notes": "FREE ($0) using ':free' model variants on OpenRouter."
+        "notes": "FREE ($0) using ':free' model variants on OpenRouter, or anthropic/claude-* models."
     },
     "groq": {
         "name": "Groq Cloud (Free Developer Tier)",
@@ -58,6 +72,7 @@ PROVIDER_CATALOG = {
         "env_key": "GROQ_API_KEY",
         "cheap_model": "llama-3.1-8b-instant",
         "smart_model": "llama-3.3-70b-versatile",
+        "opus_model": "llama-3.3-70b-versatile",
         "in_cost": 0.00,
         "cached_cost": 0.00,
         "out_cost": 0.00,
@@ -69,17 +84,19 @@ PROVIDER_CATALOG = {
         "env_key": "DEEPSEEK_API_KEY",
         "cheap_model": "deepseek-chat",
         "smart_model": "deepseek-reasoner",
+        "opus_model": "deepseek-reasoner",
         "in_cost": 0.27,
         "cached_cost": 0.07,
         "out_cost": 1.10,
         "notes": "Automatic disk prompt caching ($0.07/1M cached input tokens)."
     },
     "openai": {
-        "name": "OpenAI (Nano / Mini)",
+        "name": "OpenAI (Nano / Mini / GPT-4.1)",
         "base_url": "https://api.openai.com/v1/chat/completions",
         "env_key": "OPENAI_API_KEY",
         "cheap_model": "gpt-4.1-nano",
         "smart_model": "gpt-4.1-mini",
+        "opus_model": "gpt-4.1",
         "in_cost": 0.10,
         "cached_cost": 0.025,
         "out_cost": 0.40,
@@ -91,6 +108,7 @@ PROVIDER_CATALOG = {
         "env_key": "AZURE_OPENAI_API_KEY",
         "cheap_model": "gpt-4o-mini",
         "smart_model": "gpt-4o",
+        "opus_model": "gpt-4o",
         "in_cost": 0.15,
         "cached_cost": 0.075,
         "out_cost": 0.60,
@@ -102,6 +120,7 @@ PROVIDER_CATALOG = {
         "env_key": "OLLAMA_API_KEY",
         "cheap_model": "qwen2.5-coder:7b",
         "smart_model": "qwen2.5-coder:14b",
+        "opus_model": "qwen2.5-coder:32b",
         "in_cost": 0.00,
         "cached_cost": 0.00,
         "out_cost": 0.00,
@@ -113,12 +132,25 @@ PROVIDER_CATALOG = {
         "env_key": "GITHUB_TOKEN",
         "cheap_model": "openai/gpt-4o-mini",
         "smart_model": "openai/gpt-4o",
+        "opus_model": "openai/gpt-4o",
         "in_cost": 0.00,
         "cached_cost": 0.00,
         "out_cost": 0.00,
-        "notes": "RETIRED: GitHub shut down GitHub Models API on July 30, 2026 (returns plain 'OK'). Use gemini, openrouter, or groq."
+        "notes": "RETIRED: GitHub shut down GitHub Models API on July 30, 2026 (returns plain 'OK'). Use gemini, claude, openrouter, or groq."
     },
 }
+
+
+def get_model_for_tier(cat: dict, tier_name: str) -> str:
+    if not cat:
+        return "gemini-3.5-flash-lite"
+    t = (tier_name or "cheap").lower()
+    if t == "opus":
+        return cat.get("opus_model") or cat.get("smart_model") or cat.get("cheap_model", "gemini-3.5-flash-lite")
+    if t in ("smart", "sonnet"):
+        return cat.get("smart_model") or cat.get("cheap_model", "gemini-3.5-flash-lite")
+    return cat.get("cheap_model", "gemini-3.5-flash-lite")
+
 
 
 class Session:
@@ -484,11 +516,34 @@ def llm_chat_completion(messages: list) -> dict:
         env_hint = cat.get("env_key", "PCA_API_KEY")
         raise RuntimeError(f"Missing API Key for '{SESSION.provider}'. Set {env_hint} or PCA_API_KEY.")
 
-    payload = {
-        "model": SESSION.model,
-        "messages": messages,
-        "temperature": 0.1,
-    }
+    is_anthropic = (SESSION.provider == "claude") or SESSION.base_url.rstrip("/").endswith("/v1/messages")
+    if is_anthropic:
+        sys_blocks = []
+        chat_msgs = []
+        for m in messages:
+            if m.get("role") == "system":
+                sys_blocks.append({
+                    "type": "text",
+                    "text": str(m.get("content", "")),
+                    "cache_control": {"type": "ephemeral"},
+                })
+            else:
+                chat_msgs.append({"role": m.get("role", "user"), "content": str(m.get("content", ""))})
+        payload = {
+            "model": SESSION.model,
+            "max_tokens": 4096,
+            "messages": chat_msgs,
+            "temperature": 0.1,
+        }
+        if sys_blocks:
+            payload["system"] = sys_blocks
+    else:
+        payload = {
+            "model": SESSION.model,
+            "messages": messages,
+            "temperature": 0.1,
+        }
+
     raw_body = json.dumps(payload).encode("utf-8")
     headers = {
         "Content-Type": "application/json; charset=utf-8",
@@ -496,7 +551,10 @@ def llm_chat_completion(messages: list) -> dict:
         "User-Agent": f"pca-cli/{VERSION}",
     }
     if SESSION.api_key:
-        if SESSION.provider == "azure-openai" and "openai.azure.com" in SESSION.base_url:
+        if is_anthropic:
+            headers["x-api-key"] = SESSION.api_key
+            headers["anthropic-version"] = "2023-06-01"
+        elif SESSION.provider == "azure-openai" and "openai.azure.com" in SESSION.base_url:
             headers["api-key"] = SESSION.api_key
         else:
             headers["Authorization"] = f"Bearer {SESSION.api_key}"
@@ -522,20 +580,40 @@ def llm_chat_completion(messages: list) -> dict:
     choices = parsed.get("choices") or []
     if choices:
         reply_text = choices[0].get("message", {}).get("content") or ""
+    elif isinstance(parsed.get("content"), list):
+        parts = [
+            b.get("text", "")
+            for b in parsed["content"]
+            if isinstance(b, dict) and (b.get("type") == "text" or "text" in b)
+        ]
+        reply_text = "\n".join(p for p in parts if p)
 
     usage = parsed.get("usage") or {}
-    in_tok = int(usage.get("prompt_tokens") or estimate_tokens(raw_body.decode("utf-8")))
-    out_tok = int(usage.get("completion_tokens") or estimate_tokens(reply_text))
-    cached_tok = int(
-        (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
-        or usage.get("prompt_cache_hit_tokens")
-        or 0
-    )
+    if "input_tokens" in usage or "output_tokens" in usage:
+        cached_tok = int(usage.get("cache_read_input_tokens") or 0)
+        cache_write_tok = int(usage.get("cache_creation_input_tokens") or 0)
+        in_tok = int(usage.get("input_tokens") or 0) + cached_tok + cache_write_tok
+        out_tok = int(usage.get("output_tokens") or estimate_tokens(reply_text))
+    else:
+        in_tok = int(usage.get("prompt_tokens") or estimate_tokens(raw_body.decode("utf-8")))
+        out_tok = int(usage.get("completion_tokens") or estimate_tokens(reply_text))
+        cached_tok = int(
+            (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
+            or usage.get("prompt_cache_hit_tokens")
+            or 0
+        )
 
     cat = PROVIDER_CATALOG.get(SESSION.provider, {})
     in_rate = float(cat.get("in_cost", 0.15))
     cached_rate = float(cat.get("cached_cost", 0.075))
     out_rate = float(cat.get("out_cost", 0.60))
+    if SESSION.provider == "claude" or "claude-" in SESSION.model:
+        if "opus" in SESSION.model:
+            in_rate, cached_rate, out_rate = 4.00, 0.20, 20.00
+        elif "sonnet" in SESSION.model:
+            in_rate, cached_rate, out_rate = 2.00, 0.10, 10.00
+        elif "haiku" in SESSION.model:
+            in_rate, cached_rate, out_rate = 0.10, 0.01, 0.50
 
     uncached_in = max(0, in_tok - cached_tok)
     turn_cost = ((uncached_in / 1e6) * in_rate) + ((cached_tok / 1e6) * cached_rate) + ((out_tok / 1e6) * out_rate)
@@ -646,8 +724,12 @@ def test_single_endpoint(name: str, url: str, model_name: str, env_key: str) -> 
         "Content-Type": "application/json",
         "Accept": "application/json",
         "User-Agent": f"pca-cli/{VERSION}",
-        "Authorization": f"Bearer {probe_key}"
     }
+    if url.rstrip("/").endswith("/v1/messages") or name in ("claude", "anthropic"):
+        headers["x-api-key"] = probe_key
+        headers["anthropic-version"] = "2023-06-01"
+    else:
+        headers["Authorization"] = f"Bearer {probe_key}"
     t0 = time.time()
     req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
     try:
@@ -721,6 +803,8 @@ def run_endpoint_tests(target: str = ""):
     targets = []
     if target:
         t_low = target.lower()
+        if t_low == "anthropic":
+            t_low = "claude"
         if t_low in PROVIDER_CATALOG:
             p = PROVIDER_CATALOG[t_low]
             targets.append((t_low, p["base_url"], p["cheap_model"], p["env_key"]))
@@ -730,7 +814,7 @@ def run_endpoint_tests(target: str = ""):
             print(f"  Unknown provider or URL '{target}'.")
             return
     else:
-        for k in ("gemini", "openrouter", "groq", "deepseek", "openai", "github-models"):
+        for k in ("gemini", "claude", "openrouter", "groq", "deepseek", "openai", "github-models"):
             p = PROVIDER_CATALOG[k]
             targets.append((k, p["base_url"], p["cheap_model"], p["env_key"]))
         if SESSION.base_url and SESSION.provider == "azure-openai":
@@ -751,12 +835,12 @@ def run_endpoint_tests(target: str = ""):
 
 
 def show_providers():
-    print("\n  Available Free & Ultra-Cheap LLM Providers:")
-    print("  " + "-" * 82)
+    print("\n  Available Free & Ultra-Cheap LLM Providers (Tiers: cheap | smart | opus):")
+    print("  " + "-" * 102)
     for k, p in PROVIDER_CATALOG.items():
         mark = "*" if SESSION.provider == k else " "
-        print(f"  [{mark}] {k:<14} | Cheap: {p['cheap_model']:<26} | Env: {p['env_key']}")
-        print(f"      {p['notes']}")
+        print(f"  [{mark}] {k:<14} | Cheap: {p['cheap_model']:<22} | Smart: {p['smart_model']:<22} | Opus: {p.get('opus_model', p['smart_model'])}")
+        print(f"      Env: {p['env_key']:<21} | {p['notes']}")
     print()
 
 
@@ -772,6 +856,8 @@ def load_config_and_args(argv):
             pass
 
     SESSION.provider = os.environ.get("PCA_PROVIDER", file_cfg.get("provider", "")).lower()
+    if SESSION.provider == "anthropic":
+        SESSION.provider = "claude"
     if not SESSION.provider:
         for k, p in PROVIDER_CATALOG.items():
             if os.environ.get(p["env_key"]):
@@ -793,7 +879,7 @@ def load_config_and_args(argv):
         a = argv[i]
         if a in ("-h", "--help", "-Help"):
             print("Usage: pca [options] [prompt]")
-            print("Options: --test-endpoints [provider|url], --provider <name>, --model <name>, --tier <cheap|smart>, --skill <name>, --api-key <key>, --base-url <url>, --auto-approve, --list-providers")
+            print("Options: --test-endpoints [provider|url], --provider <name>, --model <name>, --tier <cheap|smart|opus>, --skill <name>, --api-key <key>, --base-url <url>, --auto-approve, --list-providers")
             show_providers()
             sys.exit(0)
         elif a in ("--list-providers", "-ListProviders"):
@@ -802,13 +888,19 @@ def load_config_and_args(argv):
         elif a in ("--test-endpoints", "-TestEndpoints"):
             test_endpoints_flag = True
         elif a in ("--provider", "-Provider") and i + 1 < len(argv):
-            SESSION.provider = argv[i + 1].lower()
+            p_arg = argv[i + 1].lower()
+            SESSION.provider = "claude" if p_arg == "anthropic" else p_arg
             i += 1
         elif a in ("--model", "-Model") and i + 1 < len(argv):
             SESSION.model = argv[i + 1]
             i += 1
         elif a in ("--tier", "-Tier") and i + 1 < len(argv):
-            SESSION.tier = argv[i + 1].lower()
+            t_arg = argv[i + 1].lower()
+            if t_arg == "haiku":
+                t_arg = "cheap"
+            elif t_arg == "sonnet":
+                t_arg = "smart"
+            SESSION.tier = t_arg
             i += 1
         elif a in ("--skill", "-Skill") and i + 1 < len(argv):
             sk_name = argv[i + 1].lower()
@@ -847,11 +939,14 @@ def load_config_and_args(argv):
         except OSError:
             pass
 
+    if SESSION.tier == "haiku":
+        SESSION.tier = "cheap"
+    elif SESSION.tier == "sonnet":
+        SESSION.tier = "smart"
+
     cat = PROVIDER_CATALOG.get(SESSION.provider, {})
     if not SESSION.model:
-        SESSION.model = os.environ.get("PCA_MODEL") or file_cfg.get("model") or (
-            cat.get("smart_model") if SESSION.tier == "smart" else cat.get("cheap_model", "gpt-4o-mini")
-        )
+        SESSION.model = os.environ.get("PCA_MODEL") or file_cfg.get("model") or get_model_for_tier(cat, SESSION.tier)
     if not SESSION.base_url:
         SESSION.base_url = os.environ.get("PCA_BASE_URL") or file_cfg.get("base_url") or cat.get("base_url", "")
     if not SESSION.api_key:
@@ -895,7 +990,7 @@ def main():
             if cmd in ("/exit", "/quit"):
                 break
             elif cmd == "/help":
-                print("  Commands: /test [prov|url], /provider [name], /model [name], /tier [cheap|smart], /skill [name|off], /add <file>, /drop, /files, /undo, /compact, /cost, /clear, /exit")
+                print("  Commands: /test [prov|url], /provider [name], /model [name], /tier [cheap|smart|opus], /skill [name|off], /add <file>, /drop, /files, /undo, /compact, /cost, /clear, /exit")
             elif cmd == "/test":
                 run_endpoint_tests(arg)
             elif cmd == "/skill":
@@ -910,23 +1005,25 @@ def main():
                         SESSION.active_skills.append(sk_name)
                     print(f"  Activated skill '{sk_name}'.")
             elif cmd == "/provider":
-                if not arg:
+                p_arg = "claude" if arg.lower() == "anthropic" else arg.lower()
+                if not p_arg:
                     show_providers()
-                elif arg.lower() in PROVIDER_CATALOG:
-                    SESSION.provider = arg.lower()
+                elif p_arg in PROVIDER_CATALOG:
+                    SESSION.provider = p_arg
                     cat = PROVIDER_CATALOG[SESSION.provider]
                     SESSION.base_url = cat["base_url"]
-                    SESSION.model = cat["smart_model"] if SESSION.tier == "smart" else cat["cheap_model"]
+                    SESSION.model = get_model_for_tier(cat, SESSION.tier)
                     SESSION.api_key = os.environ.get(cat["env_key"], SESSION.api_key)
                     print(f"  Switched to {SESSION.provider} ({SESSION.model})")
             elif cmd == "/model":
                 if arg:
                     SESSION.model = arg
                 print(f"  Model: {SESSION.model}")
-            elif cmd == "/tier" and arg in ("cheap", "smart"):
-                SESSION.tier = arg
+            elif cmd == "/tier" and arg.lower() in ("cheap", "smart", "opus", "haiku", "sonnet"):
+                t_arg = arg.lower()
+                SESSION.tier = "cheap" if t_arg == "haiku" else ("smart" if t_arg == "sonnet" else t_arg)
                 cat = PROVIDER_CATALOG.get(SESSION.provider, {})
-                SESSION.model = cat.get("smart_model" if arg == "smart" else "cheap_model", SESSION.model)
+                SESSION.model = get_model_for_tier(cat, SESSION.tier)
                 print(f"  Tier: {SESSION.tier} ({SESSION.model})")
             elif cmd == "/files":
                 print(tool_list_files(".", 2))
