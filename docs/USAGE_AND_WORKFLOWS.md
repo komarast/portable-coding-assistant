@@ -65,17 +65,19 @@ Get-EventLog -LogName Application -EntryType Error -Newest 10 | Format-List | Ou
 
 | Windows Flag (`pca.ps1` / `pca.cmd`) | Linux/macOS Flag (`pca.sh`) | Description |
 | :--- | :--- | :--- |
-| `-Provider <name>` | `--provider <name>` | Select LLM provider (`github-models`, `gemini`, `openrouter`, `groq`, `deepseek`, `openai`, `azure-openai`, `ollama`) |
-| `-Tier <cheap\|smart>` | `--tier <cheap\|smart>` | Use the provider's `cheap` (fast/low-cost) or `smart` (reasoning/frontier) default model |
-| `-Model <id>` | `--model <id>` | Override the exact model name (e.g. `-Model DeepSeek-R1`) |
-| `-ApiKey <key>` | `--api-key <key>` | Pass API key directly (overrides environment variable and `.pca.json`) |
-| `-BaseUrl <url>` | `--base-url <url>` | Override the OpenAI-compatible chat completions endpoint URL |
+| `-Provider <name>` | `--provider <name>` | Select LLM provider (`gemini`, `claude`, `openrouter`, `groq`, `deepseek`, `openai`, `azure-openai`, `ollama`) |
+| `-Tier <cheap\|smart\|opus>` | `--tier <cheap\|smart\|opus>` | Select model tier: `cheap` (Haiku/Flash-Lite), `smart` (Sonnet/Flash), or `opus` (Opus/Pro) |
+| `-Model <id>` | `--model <id>` | Override the exact model name (e.g. `-Model claude-sonnet-5-5` or `-Model DeepSeek-R1`) |
+| `-Skill <name>` | `--skill <name>` | Activate one or more skills (`uipath`, `uipath-desktop`, `uipath-planner`, `uipath-review`) |
+| `-ApiKey <key>` | `--api-key <key>` | Pass API key directly (overrides environment variable, DPAPI store, and `.pca.json`) |
+| `-BaseUrl <url>` | `--base-url <url>` | Override the API endpoint URL |
 | `-AddFile <path>` | `--add <path>` | Pin one or more files into the system prompt context |
 | `-AutoApprove` | `--auto-approve` / `-y` | Automatically approve file edits and shell commands without prompting |
 | `-NoTools` | `--no-tools` | Disable agentic tool execution (pure chat/Q&A mode) |
 | `-SkipCertCheck` | *(via env)* | Ignore self-signed SSL certificate errors on internal corporate gateways |
 | `-CompileExe` | *(Windows only)* | Compile a standalone `pca.exe` binary using built-in `.NET` `csc.exe` |
 | `-InitConfig` | *(REPL `/init`)* | Generate a starter `.pca.json` configuration file in the current directory |
+| `-TestEndpoints` | `--test-endpoints` | Probe corporate firewall/proxy connectivity to AI endpoints |
 | `-ListProviders` | `--list-providers` | Print table of all built-in free and ultra-cheap providers |
 | `-Help` | `--help` / `-h` | Show help message and provider catalog |
 
@@ -83,12 +85,16 @@ Get-EventLog -LogName Application -EntryType Error -Newest 10 | Format-List | Ou
 
 ## 3. Interactive Slash Commands Reference
 
-While inside the interactive `pca>` prompt, use these slash commands to control context, models, and costs:
+While inside the interactive `pca>` prompt, use these slash commands to control context, models, skills, and costs:
 
+- **`/uipath [plan|review|full|off]`** — Activate UiPath XAML & Desktop UI Automation Agent skills (`uipath` + `uipath-desktop` by default, or add `uipath-planner` / `uipath-review`).
+- **`/key <api_key>` / `/key save <api_key>`** — Set the API key for the current session or encrypt and save it permanently using Windows DPAPI (`~/.pca.keys.dpapi.json`).
+- **`/test [provider|url]`** — Test which AI endpoints pass through your corporate firewall/proxy.
 - **`/provider`** — Display all configured providers and which one is active.
-- **`/provider <name>`** — Switch provider immediately (e.g. `/provider gemini` or `/provider deepseek`).
-- **`/tier cheap` / `/tier smart`** — Start with `cheap` for exploration and file search; switch to `/tier smart` right before asking for a complex multi-file refactor, then switch back to `/tier cheap`.
-- **`/model <name>`** — Switch to any specific model supported by your current provider (e.g. `/model Codestral-2501`).
+- **`/provider <name>`** — Switch provider immediately (e.g. `/provider claude`, `/provider gemini`, or `/provider deepseek`).
+- **`/tier cheap` / `/tier smart` / `/tier opus`** — Switch between `cheap` (Haiku/Flash-Lite), `smart` (Sonnet/Flash), and `opus` (Opus/Pro).
+- **`/model <name>`** — Switch to any specific model supported by your current provider (e.g. `/model claude-sonnet-5-5`).
+- **`/skill [name|off]`** — Activate a domain skill (`skills/<name>/SKILL.md`) or clear active skills.
 - **`/add <relative/path>`** — Pin an important file (like an interface or config schema) so it stays in the cached system prompt prefix.
 - **`/drop [file|all]`** — Unpin a file when you no longer need it in every turn's context.
 - **`/files`** — Inspect the workspace directory tree (automatically ignores `.git`, `node_modules`, `bin`, `obj`, etc.).
