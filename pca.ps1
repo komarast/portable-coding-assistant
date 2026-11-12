@@ -768,6 +768,7 @@ public class PcaLauncher {
         $argsList = New-Object System.Collections.Generic.List[string]
         $varsList = New-Object System.Collections.Generic.List[string]
         $actsList = New-Object System.Collections.Generic.List[string]
+        $selsList = New-Object System.Collections.Generic.List[string]
         $inViewState = $false
 
         for ($i = 0; $i -lt $lines.Count; $i++) {
@@ -798,6 +799,11 @@ public class PcaLauncher {
                 elseif ($ln -match 'Selector="([^"]+)"') { $extra = " [Selector]" }
                 $actsList.Add(('  Line {0,4}: [{1}] `{2}`{3}' -f $lineNum, $tag, $disp, $extra))
             }
+
+            if ($ln -match '(?:FullSelectorArgument|Selector)="([^"]+)"') {
+                $rawSel = $Matches[1] -replace '&lt;', '<' -replace '&gt;', '>' -replace '&quot;', '"' -replace '&amp;', '&'
+                $selsList.Add(("  Line {0,4}: {1}" -f $lineNum, $rawSel))
+            }
         }
 
         $out.Add("Arguments ($($argsList.Count)):")
@@ -812,8 +818,391 @@ public class PcaLauncher {
         } else {
             $out.Add("  (none with DisplayName)")
         }
-        $out.Add("Tip: Use read_file with start_line/end_line around the specific Line number above before calling edit_file.")
+        $out.Add("UI Selectors ($($selsList.Count)):")
+        if ($selsList.Count -gt 0) {
+            $maxSel = [Math]::Min($selsList.Count, 40)
+            for ($k = 0; $k -lt $maxSel; $k++) { $out.Add($selsList[$k]) }
+        } else {
+            $out.Add("  (none)")
+        }
+        $out.Add("Tip: Use read_file with start_line/end_line around the specific Line number above before calling edit_file, then run validate_xaml.")
         return ($out -join "`n")
+    }
+
+    function Invoke-ToolInspectUiTree {
+        param(
+            [string]$WindowTitle = "",
+            [int]$MaxDepth = 3
+        )
+        try {
+            Add-Type -AssemblyName UIAutomationClient -ErrorAction Stop
+            Add-Type -AssemblyName UIAutomationTypes -ErrorAction Stop
+        } catch {
+            return "Error: Windows UIAutomationClient assembly could not be loaded: $($_.Exception.Message)"
+        }
+
+        $root = [System.Windows.Automation.AutomationElement]::RootElement
+        if ($null -eq $root) { return "Error: AutomationElement.RootElement is unavailable." }
+
+        $winCond = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::Window
+        )
+        $windows = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $winCond)
+        $out = New-Object System.Collections.Generic.List[string]
+
+        if ([string]::IsNullOrEmpty($WindowTitle)) {
+            $out.Add("=== Open Windows Desktop Applications (Live UIAutomation) ===")
+            $count = 0
+            foreach ($w in $windows) {
+                try {
+                    $wName = [string]$w.Current.Name
+                    $wCls  = [string]$w.Current.ClassName
+                    $pidVal = [int]$w.Current.ProcessId
+                    if ([string]::IsNullOrWhiteSpace($wName)) { continue }
+                    $procName = "unknown.exe"
+                    try {
+                        $pObj = [System.Diagnostics.Process]::GetProcessById($pidVal)
+                        if ($pObj -and $pObj.ProcessName) { $procName = "$($pObj.ProcessName).exe" }
+                    } catch {}
+                    $count++
+                    $out.Add(("  [{0}] Title: '{1}' | App: {2} | Class: {3}" -f $count, $wName, $procName, $wCls))
+                    $out.Add(("      UiPath Window Selector: <wnd app='{0}' cls='{1}' title='{2}' />" -f $procName, $wCls, $wName))
+                } catch {}
+            }
+            if ($count -eq 0) { $out.Add("  (No visible top-level desktop windows found)") }
+            $out.Add("Tip: Call inspect_ui_tree with window_title='*PartOfTitle*' and max_depth=3 to inspect controls inside a window.")
+            return ($out -join "`n")
+        }
+
+        $pattern = "^" + ([regex]::Escape($WindowTitle) -replace "\\\*", ".*" -replace "\\\?", ".") + "$"
+        $matchedWin = $null
+        foreach ($w in $windows) {
+            try {
+                $wName = [string]$w.Current.Name
+                if (-not [string]::IsNullOrEmpty($wName) -and ($wName -match "(?i)$pattern" -or $wName.IndexOf($WindowTitle, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)) {
+                    $matchedWin = $w
+                    break
+                }
+            } catch {}
+        }
+        if ($null -eq $matchedWin) {
+            return "No open desktop window matched title '$WindowTitle'. Call inspect_ui_tree with window_title='' to list all open windows."
+        }
+
+        $wTitle = [string]$matchedWin.Current.Name
+        $wClass = [string]$matchedWin.Current.ClassName
+        $wPid   = [int]$matchedWin.Current.ProcessId
+        $appExe = "app.exe"
+        try {
+            $pObj = [System.Diagnostics.Process]::GetProcessById($wPid)
+            if ($pObj -and $pObj.ProcessName) { $appExe = "$($pObj.ProcessName).exe" }
+        } catch {}
+
+        $out.Add("=== Desktop UI Control Tree for '$wTitle' ($appExe) ===")
+        $out.Add("TargetApp Selector: <wnd app='$appExe' cls='$wClass' title='$wTitle' />")
+        $out.Add("Controls:")
+
+        $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+        $nodeCount = 0
+        $maxNodes = 120
+
+        function Walk-UiElement {
+            param($Element, [int]$Depth)
+            if ($null -eq $Element -or $Depth -gt $MaxDepth -or $nodeCount -ge $maxNodes) { return }
+            $child = $null
+            try { $child = $walker.GetFirstChild($Element) } catch {}
+            while ($null -ne $child -and $nodeCount -lt $maxNodes) {
+                try {
+                    $cName = [string]$child.Current.Name
+                    $cId   = [string]$child.Current.AutomationId
+                    $cCls  = [string]$child.Current.ClassName
+                    $cType = [string]$child.Current.ControlType.ProgrammaticName -replace "^ControlType\.", ""
+                    $role  = $cType.ToLower()
+                    $indent = "  " * $Depth
+                    $selParts = New-Object System.Collections.Generic.List[string]
+                    if (-not [string]::IsNullOrEmpty($cId))   { $selParts.Add("automationid='$cId'") }
+                    if (-not [string]::IsNullOrEmpty($cName)) { $selParts.Add("name='$($cName -replace "'", "")'") }
+                    $selParts.Add("role='$role'")
+                    $uiaSel = "<uia " + ($selParts -join " ") + " />"
+                    if (-not [string]::IsNullOrEmpty($cName) -or -not [string]::IsNullOrEmpty($cId)) {
+                        $script:nodeCount++
+                        $out.Add(("{0}- [{1}] Name='{2}' AutomationId='{3}' Class='{4}' -> {5}" -f $indent, $cType, $cName, $cId, $cCls, $uiaSel))
+                    }
+                    Walk-UiElement -Element $child -Depth ($Depth + 1)
+                } catch {}
+                try { $child = $walker.GetNextSibling($child) } catch { $child = $null }
+            }
+        }
+
+        Walk-UiElement -Element $matchedWin -Depth 1
+        return ($out -join "`n")
+    }
+
+    function Invoke-ToolValidateXaml {
+        param([string]$Path)
+        if ([string]::IsNullOrEmpty($Path)) { return "Error: path is required." }
+        $full = Get-SafePath $Path
+        if (-not (Test-Path $full -PathType Leaf)) {
+            return "Error: XAML file does not exist: $Path"
+        }
+
+        $raw = [System.IO.File]::ReadAllText($full, [System.Text.Encoding]::UTF8)
+        $errors = New-Object System.Collections.Generic.List[string]
+        $warnings = New-Object System.Collections.Generic.List[string]
+
+        # 1. XML Well-formedness check
+        $xmlDoc = New-Object System.Xml.XmlDocument
+        try {
+            $xmlDoc.LoadXml($raw)
+        } catch {
+            $errors.Add("[XML-001] Invalid XML structure: $($_.Exception.Message)")
+            return ("=== XAML Validation FAILED: $(Get-RelativePath $full) ===`nErrors:`n  " + ($errors -join "`n  "))
+        }
+
+        $root = $xmlDoc.DocumentElement
+        if ($null -eq $root -or $root.LocalName -ne "Activity") {
+            $errors.Add("[XAML-001] Root element must be <Activity>, found '<$($root.Name)>'.")
+        }
+
+        # 2. Required XML Namespace checks
+        if ($raw -match "<uix:" -and $raw -notmatch 'xmlns:uix=') {
+            $errors.Add("[XAML-002] Uses <uix:*> Modern UIA activities but root <Activity> is missing xmlns:uix declaration.")
+        }
+        if ($raw -match "<ui:" -and $raw -notmatch 'xmlns:ui=') {
+            $errors.Add("[XAML-003] Uses <ui:*> activities but root <Activity> is missing xmlns:ui declaration.")
+        }
+
+        # 3. Scope ActivityAction Body check (Rule from UiPath/skills xaml-basics-and-rules.md)
+        $scopeBodies = @("NApplicationCard.Body", "WindowScope.Body", "BrowserScope.Body", "ExcelApplicationScope.Body")
+        foreach ($sb in $scopeBodies) {
+            $pattern = "(?s)<(?:uix|ui):$sb>\s*<(?!ActivityAction)([A-Za-z0-9_:]+)"
+            if ($raw -match $pattern) {
+                $errors.Add("[XAML-SCOPE-001] <$sb> must wrap child activities inside <ActivityAction x:TypeArguments='...'><ActivityAction.Argument><DelegateInArgument ... /></ActivityAction.Argument>...</ActivityAction>, found direct child <$($Matches[1])>.")
+            }
+        }
+
+        # 4. Flowchart direct child check
+        if ($raw -match "<Flowchart[\s>]") {
+            if ($raw -match "(?s)<FlowStep[\s>].*?<FlowStep[\s>]") {
+                # Check if FlowStep is nested inside another FlowStep rather than direct child of Flowchart
+                $fcNodes = $xmlDoc.GetElementsByTagName("FlowStep")
+                foreach ($fn in $fcNodes) {
+                    if ($fn.ParentNode -and $fn.ParentNode.LocalName -ne "Flowchart" -and $fn.ParentNode.LocalName -ne "FlowStep.Next" -and $fn.ParentNode.LocalName -ne "FlowDecision.True" -and $fn.ParentNode.LocalName -ne "FlowDecision.False") {
+                        $warnings.Add("[XAML-FLOW-001] Prefer placing all <FlowStep> nodes as direct children of <Flowchart> with x:Reference links.")
+                        break
+                    }
+                }
+            }
+        }
+
+        # 5. Expression Language & Selector Quality Lint
+        $exprLang = "VisualBasic"
+        $projPath = Join-Path $Script:WorkspaceRoot "project.json"
+        if (Test-Path $projPath -PathType Leaf) {
+            try {
+                $projJson = [System.IO.File]::ReadAllText($projPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+                if ($projJson.expressionLanguage) { $exprLang = [string]$projJson.expressionLanguage }
+            } catch {}
+        }
+        if ($exprLang -eq "VisualBasic" -and $raw -match '\[[^\]]*(?:&&|\|\||=>|null\b)[^\]]*\]') {
+            $warnings.Add("[EXPR-001] project.json expressionLanguage is 'VisualBasic', but C#-style syntax (&&, ||, =>, null) was detected inside a [...] expression. Use AndAlso, OrElse, Function(x), Nothing.")
+        } elseif ($exprLang -eq "CSharp" -and $raw -match '\[[^\]]*(?:\bAndAlso\b|\bOrElse\b|\bNothing\b|\bFunction\s*\()[^\]]*\]') {
+            $warnings.Add("[EXPR-002] project.json expressionLanguage is 'CSharp', but VB.NET syntax (AndAlso, OrElse, Nothing, Function()) was detected inside a [...] expression.")
+        }
+
+        if ($raw -match "idx='[2-9]\d*'" -or $raw -match "idx=&apos;[2-9]\d*&apos;") {
+            $warnings.Add("[UI-ANA-001] Volatile selector attribute idx > 1 detected. Prefer automationid, aaname, name, ctrlname, or TargetAnchorable.Anchors.")
+        }
+        if ($raw -match "<Delay[\s>]") {
+            $warnings.Add("[ST-USG-010] Hardcoded <Delay> activity detected. Prefer <uix:NCheckAppState> or WaitForReady='COMPLETE' for resilient desktop synchronization.")
+        }
+
+        $status = if ($errors.Count -eq 0) { "PASSED" } else { "FAILED ($($errors.Count) error(s))" }
+        $out = New-Object System.Collections.Generic.List[string]
+        $out.Add("=== UiPath XAML Validation: $(Get-RelativePath $full) -> $status (ExpressionLanguage: $exprLang) ===")
+        if ($errors.Count -gt 0) {
+            $out.Add("Errors ($($errors.Count)):")
+            foreach ($e in $errors) { $out.Add("  - $e") }
+        }
+        if ($warnings.Count -gt 0) {
+            $out.Add("Warnings / Best-Practice Hints ($($warnings.Count)):")
+            foreach ($w in $warnings) { $out.Add("  - $w") }
+        }
+        if ($errors.Count -eq 0 -and $warnings.Count -eq 0) {
+            $out.Add("  All XML structure, namespace, ActivityAction scope, expression language, and selector checks passed cleanly!")
+        }
+        return ($out -join "`n")
+    }
+
+    function Invoke-ToolScaffoldXaml {
+        param(
+            [string]$Path,
+            [string]$Template = "sequence",
+            [string]$AppExe = "notepad.exe",
+            [string]$WindowTitle = "*Notepad*"
+        )
+        if ([string]::IsNullOrEmpty($Path)) { return "Error: path is required." }
+        $full = Get-SafePath $Path
+        $rel  = Get-RelativePath $full
+        $wfName = [System.IO.Path]::GetFileNameWithoutExtension($full) -replace "[^A-Za-z0-9_]", "_"
+        $tLower = if ($Template) { $Template.ToLower() } else { "sequence" }
+
+        $xamlContent = ""
+        if ($tLower -eq "desktop-uia") {
+            $xamlContent = @'
+<Activity mc:Ignorable="sap sap2010" x:Class="__WF_NAME__"
+ xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+ xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+ xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
+ xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
+ xmlns:scg="clr-namespace:System.Collections.Generic;assembly=System.Private.CoreLib"
+ xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib"
+ xmlns:ui="http://schemas.uipath.com/workflow/activities"
+ xmlns:uix="http://schemas.uipath.com/workflow/activities/uiautomation/next/activities"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <x:Members>
+    <x:Property Name="in_InputText" Type="InArgument(x:String)" />
+    <x:Property Name="out_ResultText" Type="OutArgument(x:String)" />
+  </x:Members>
+  <Sequence DisplayName="__WF_NAME__" sap2010:WorkflowViewState.IdRef="Sequence_1">
+    <Sequence.Variables>
+      <Variable x:TypeArguments="x:String" Name="str_WindowStatus" />
+    </Sequence.Variables>
+    <ui:LogMessage DisplayName="Log Start __WF_NAME__" Level="Info" Message="[&quot;Starting desktop workflow: __WF_NAME__&quot;]" />
+    <uix:NApplicationCard AttachMode="ByInstance" DisplayName="Use Desktop Application '__APP_EXE__'" OpenMode="IfNotOpen" ScopeGuid="d1a2b3c4-0000-4000-8000-000000000001" Version="V2">
+      <uix:NApplicationCard.Body>
+        <ActivityAction x:TypeArguments="x:Object">
+          <ActivityAction.Argument>
+            <DelegateInArgument x:TypeArguments="x:Object" Name="WSSessionData" />
+          </ActivityAction.Argument>
+          <Sequence DisplayName="Do Desktop UI Actions">
+            <uix:NTypeInto ActivateBefore="True" ClickBeforeMode="Single" DisplayName="Type Into Main Input" EmptyFieldMode="SingleLine" InteractionMode="Simulate" ScopeIdentifier="d1a2b3c4-0000-4000-8000-000000000001" Text="[in_InputText]" Version="V3">
+              <uix:NTypeInto.Target>
+                <uix:TargetAnchorable DesignTimeRectangle="0, 0, 300, 100" ElementType="InputBox" FullSelectorArgument="&lt;uia role='edit' /&gt;" FuzzySelectorArgument="&lt;uia role='edit' /&gt;" Guid="a1b2c3d4-0001-4000-8000-000000000002" SearchSteps="Selector, FuzzySelector" Version="V2" Visibility="Interactive" />
+              </uix:NTypeInto.Target>
+            </uix:NTypeInto>
+          </Sequence>
+        </ActivityAction>
+      </uix:NApplicationCard.Body>
+      <uix:NApplicationCard.TargetApp>
+        <uix:TargetApp FilePath="__APP_EXE__" Selector="&lt;wnd app='__APP_EXE__' title='__WIN_TITLE__' /&gt;" />
+      </uix:NApplicationCard.TargetApp>
+    </uix:NApplicationCard>
+  </Sequence>
+</Activity>
+'@
+        } elseif ($tLower -eq "try-catch-process") {
+            $xamlContent = @'
+<Activity mc:Ignorable="sap sap2010" x:Class="__WF_NAME__"
+ xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+ xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+ xmlns:s="clr-namespace:System;assembly=System.Private.CoreLib"
+ xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
+ xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
+ xmlns:scg="clr-namespace:System.Collections.Generic;assembly=System.Private.CoreLib"
+ xmlns:ui="http://schemas.uipath.com/workflow/activities"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <x:Members>
+    <x:Property Name="in_TransactionId" Type="InArgument(x:String)" />
+    <x:Property Name="out_Success" Type="OutArgument(x:Boolean)" />
+  </x:Members>
+  <Sequence DisplayName="__WF_NAME__" sap2010:WorkflowViewState.IdRef="Sequence_1">
+    <TryCatch DisplayName="Try Catch - __WF_NAME__">
+      <TryCatch.Try>
+        <Sequence DisplayName="Execute Process Steps">
+          <ui:LogMessage DisplayName="Log Process Start" Level="Info" Message="[&quot;Processing transaction: &quot; &amp; in_TransactionId]" />
+          <Assign DisplayName="Set out_Success True">
+            <Assign.To>
+              <OutArgument x:TypeArguments="x:Boolean">[out_Success]</OutArgument>
+            </Assign.To>
+            <Assign.Value>
+              <InArgument x:TypeArguments="x:Boolean">[True]</InArgument>
+            </Assign.Value>
+          </Assign>
+        </Sequence>
+      </TryCatch.Try>
+      <TryCatch.Catches>
+        <Catch x:TypeArguments="ui:BusinessRuleException">
+          <ActivityAction x:TypeArguments="ui:BusinessRuleException">
+            <ActivityAction.Argument>
+              <DelegateInArgument x:TypeArguments="ui:BusinessRuleException" Name="bre" />
+            </ActivityAction.Argument>
+            <ui:LogMessage DisplayName="Log BusinessRuleException" Level="Warn" Message="[&quot;Business Rule Exception (No Retry): &quot; &amp; bre.Message]" />
+          </ActivityAction>
+        </Catch>
+        <Catch x:TypeArguments="s:Exception">
+          <ActivityAction x:TypeArguments="s:Exception">
+            <ActivityAction.Argument>
+              <DelegateInArgument x:TypeArguments="s:Exception" Name="ex" />
+            </ActivityAction.Argument>
+            <ui:LogMessage DisplayName="Log System Exception" Level="Error" Message="[&quot;System Exception: &quot; &amp; ex.Message]" />
+          </ActivityAction>
+        </Catch>
+      </TryCatch.Catches>
+    </TryCatch>
+  </Sequence>
+</Activity>
+'@
+        } elseif ($tLower -eq "flowchart") {
+            $xamlContent = @'
+<Activity mc:Ignorable="sap sap2010" x:Class="__WF_NAME__"
+ xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+ xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+ xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
+ xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
+ xmlns:scg="clr-namespace:System.Collections.Generic;assembly=System.Private.CoreLib"
+ xmlns:ui="http://schemas.uipath.com/workflow/activities"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Flowchart DisplayName="__WF_NAME__" sap2010:WorkflowViewState.IdRef="Flowchart_1">
+    <Flowchart.StartNode>
+      <x:Reference>__ReferenceID0</x:Reference>
+    </Flowchart.StartNode>
+    <FlowStep x:Name="__ReferenceID0">
+      <Sequence DisplayName="Step 1 - Initialize">
+        <ui:LogMessage DisplayName="Log Flowchart Start" Level="Info" Message="[&quot;Flowchart started: __WF_NAME__&quot;]" />
+      </Sequence>
+    </FlowStep>
+  </Flowchart>
+</Activity>
+'@
+        } else {
+            $xamlContent = @'
+<Activity mc:Ignorable="sap sap2010" x:Class="__WF_NAME__"
+ xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+ xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+ xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
+ xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
+ xmlns:scg="clr-namespace:System.Collections.Generic;assembly=System.Private.CoreLib"
+ xmlns:ui="http://schemas.uipath.com/workflow/activities"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <x:Members>
+    <x:Property Name="in_Input" Type="InArgument(x:String)" />
+    <x:Property Name="out_Result" Type="OutArgument(x:String)" />
+  </x:Members>
+  <Sequence DisplayName="__WF_NAME__" sap2010:WorkflowViewState.IdRef="Sequence_1">
+    <Sequence.Variables>
+      <Variable x:TypeArguments="x:String" Name="str_Status" />
+    </Sequence.Variables>
+    <ui:LogMessage DisplayName="Log Start __WF_NAME__" Level="Info" Message="[&quot;Starting workflow: __WF_NAME__&quot;]" />
+  </Sequence>
+</Activity>
+'@
+        }
+
+        $xamlContent = $xamlContent.Replace("__WF_NAME__", $wfName).Replace("__APP_EXE__", $AppExe).Replace("__WIN_TITLE__", $WindowTitle)
+
+        $existed = Test-Path $full -PathType Leaf
+        $oldContent = if ($existed) { [System.IO.File]::ReadAllText($full, [System.Text.Encoding]::UTF8) } else { "" }
+        if (-not (Confirm-UserAction -Title "Scaffold UiPath XAML '$rel' ($tLower)" -PreviewText "+ [XAML Workflow: $rel ($($xamlContent.Length) chars)]")) {
+            return "User declined scaffolding XAML '$rel'."
+        }
+        $parentDir = Split-Path -Parent $full
+        if (-not (Test-Path $parentDir)) { New-Item -ItemType Directory -Path $parentDir -Force | Out-Null }
+        [System.IO.File]::WriteAllText($full, $xamlContent, (New-Object System.Text.UTF8Encoding($false)))
+        $Script:Session.UndoStack.Add(@{ Path = $full; Existed = $existed; OldContent = $oldContent })
+        $valReport = Invoke-ToolValidateXaml -Path $Path
+        return "Scaffolded '$rel' using template '$tLower'.`n$valReport"
     }
 
     function Get-SkillContent {
@@ -831,8 +1220,8 @@ public class PcaLauncher {
             return @'
 # UiPath Studio & Robot Built-in Skill
 - Always call `inspect_xaml` first on `.xaml` files to get Arguments, Variables, and Activity line numbers without wasting tokens on ViewState XML.
-- Check `project.json` for `expressionLanguage` (`VisualBasic` vs `CSharp`) and never mix VB.NET (`Nothing`, `AndAlso`, `Function(x)`) with C# (`null`, `&&`, `x =>`).
-- Preserve XML tag balance and namespaces when patching `.xaml` files with `edit_file`.
+- Use `inspect_ui_tree` on Windows to inspect open desktop windows and get live `<wnd ... /><uia ... />` selectors.
+- Use `scaffold_xaml` (`sequence`, `desktop-uia`, `flowchart`, `try-catch-process`) to create new `.xaml` files, and always run `validate_xaml` after editing `.xaml`.
 '@
         }
         return ""
@@ -859,12 +1248,12 @@ public class PcaLauncher {
     # Prompt Cache-Aligned System Prompt & Compact Tool Protocol
     # =========================================================================
     function Build-SystemPrompt {
-        # Static instructions come first for 100% prefix cache hits on DeepSeek / OpenAI / Gemini
+        # Static instructions come first for 100% prefix cache hits on DeepSeek / OpenAI / Gemini / Claude
         $sys = @'
-You are PCA (Portable Coding Assistant), an expert, token-efficient coding agent running on a Windows corporate/AVD environment.
+You are PCA (Portable Coding Assistant), an expert, token-efficient coding & UiPath XAML Desktop Automation agent running on a Windows corporate/AVD environment.
 Be concise, accurate, and surgical. Minimize unnecessary prose and avoid repeating unchanged code.
 
-When you need to inspect files, search code, edit files, or run commands, you may either use native tool_calls OR emit a fenced tool block in your response using this exact JSON format:
+When you need to inspect files, search code, inspect or scaffold UiPath XAML, inspect live Windows desktop UI trees, edit files, or run commands, emit a fenced tool block in your response using this exact JSON format:
 ```pca-tool
 {"tool": "list_files", "sub_dir": ".", "max_depth": 2}
 ```
@@ -872,14 +1261,17 @@ Available tools:
 1. list_files: {"tool": "list_files", "sub_dir": ".", "max_depth": 2}
 2. search_text: {"tool": "search_text", "pattern": "regex", "sub_dir": "."}
 3. read_file: {"tool": "read_file", "path": "relative/path", "start_line": 1, "end_line": 120}
-4. inspect_xaml: {"tool": "inspect_xaml", "path": "Main.xaml"} (Extracts UiPath .xaml Arguments, Variables & Activity line numbers, skipping ViewState noise)
-5. edit_file: {"tool": "edit_file", "path": "relative/path", "search": "exact existing lines", "replace": "new lines"}
+4. inspect_xaml: {"tool": "inspect_xaml", "path": "Main.xaml"} (Extracts UiPath .xaml Arguments, Variables, Activity line numbers & UI Selectors, skipping ViewState noise)
+5. inspect_ui_tree: {"tool": "inspect_ui_tree", "window_title": "*Notepad*", "max_depth": 3} (Lists open Windows desktop apps when window_title is "", or inspects live UIAutomation controls and outputs ready-to-use UiPath <wnd>/<uia> selectors)
+6. scaffold_xaml: {"tool": "scaffold_xaml", "path": "Workflows/Action.xaml", "template": "desktop-uia", "app_exe": "notepad.exe", "window_title": "*Notepad*"} (Templates: "sequence", "desktop-uia", "flowchart", "try-catch-process")
+7. validate_xaml: {"tool": "validate_xaml", "path": "Main.xaml"} (Validates .xaml XML structure, required xmlns namespaces, ActivityAction scope bodies, expression language, and selector rules)
+8. edit_file: {"tool": "edit_file", "path": "relative/path", "search": "exact existing lines", "replace": "new lines"}
    (To create a new file, set "search": "" and put full file content in "replace".)
-6. run_command: {"tool": "run_command", "command": "powershell command"}
+9. run_command: {"tool": "run_command", "command": "powershell command"}
 
-Rules for Token Efficiency:
+Rules for Token Efficiency & UiPath XAML Quality:
 - Never dump or rewrite an entire large file when a small SEARCH/REPLACE block in edit_file suffices.
-- For UiPath `.xaml` files, call `inspect_xaml` first to locate exact activity line numbers, then `read_file` only that small line range.
+- For UiPath `.xaml` files: call `inspect_xaml` first to locate exact activity line numbers, use `scaffold_xaml` when creating a new `.xaml` file, and ALWAYS run `validate_xaml` after creating or editing any `.xaml` file.
 - Emit at most ONE ```pca-tool``` block per turn when waiting for tool output, then wait for the [Tool Result] before continuing.
 '@
         if ($Script:Session.ActiveSkills.Count -gt 0) {
@@ -1152,6 +1544,22 @@ Rules for Token Efficiency:
             "inspect_xaml" {
                 $p = [string]$ToolCall.path
                 return Invoke-ToolInspectXaml -Path $p
+            }
+            "inspect_ui_tree" {
+                $wt = if ($null -ne $ToolCall.window_title) { [string]$ToolCall.window_title } else { "" }
+                $md = if ($ToolCall.max_depth) { [int]$ToolCall.max_depth } else { 3 }
+                return Invoke-ToolInspectUiTree -WindowTitle $wt -MaxDepth $md
+            }
+            "validate_xaml" {
+                $p = [string]$ToolCall.path
+                return Invoke-ToolValidateXaml -Path $p
+            }
+            "scaffold_xaml" {
+                $p   = [string]$ToolCall.path
+                $tpl = if ($ToolCall.template)     { [string]$ToolCall.template }     else { "sequence" }
+                $exe = if ($ToolCall.app_exe)      { [string]$ToolCall.app_exe }      else { "notepad.exe" }
+                $wt  = if ($ToolCall.window_title) { [string]$ToolCall.window_title } else { "*Notepad*" }
+                return Invoke-ToolScaffoldXaml -Path $p -Template $tpl -AppExe $exe -WindowTitle $wt
             }
             "edit_file" {
                 $p   = [string]$ToolCall.path
@@ -1469,7 +1877,8 @@ Rules for Token Efficiency:
     /provider [name]        List providers or switch active provider (e.g. /provider claude, /provider gemini)
     /model [name]           Switch active model name (e.g. /model claude-sonnet-5-5)
     /tier [cheap|smart|opus] Switch between cheap (Haiku/Flash), smart (Sonnet/Pro), and opus tiers
-    /skill [name|off]       Activate a domain skill (e.g. /skill uipath) or clear skills (/skill off)
+    /uipath                 Activate UiPath XAML & Desktop Automation Agent mode (uipath + uipath-desktop)
+    /skill [name|off]       Activate a domain skill (uipath, uipath-desktop, uipath-planner, uipath-review)
     /add <file>             Pin a file to system context
     /drop [file|all]        Unpin a file or clear all pinned files
     /files                  List workspace files
@@ -1503,10 +1912,20 @@ Rules for Token Efficiency:
                     }
                 }
             }
+            "/uipath" {
+                foreach ($sk in @("uipath", "uipath-desktop")) {
+                    if (-not $Script:Session.ActiveSkills.Contains($sk)) {
+                        $Script:Session.ActiveSkills.Add($sk)
+                    }
+                }
+                Write-Host "  Activated UiPath XAML & Desktop Automation Agent skills: $($Script:Session.ActiveSkills -join ', ')" -ForegroundColor Green
+                Write-Host "  Additional UiPath skills available via /skill: uipath-planner, uipath-review" -ForegroundColor DarkGray
+            }
             "/skill" {
                 if ([string]::IsNullOrEmpty($arg)) {
                     $activeStr = if ($Script:Session.ActiveSkills.Count -gt 0) { ($Script:Session.ActiveSkills -join ", ") } else { "none" }
-                    Write-Host "  Active skills: $activeStr (Try '/skill uipath' or '/skill off')" -ForegroundColor Cyan
+                    Write-Host "  Active skills: $activeStr" -ForegroundColor Cyan
+                    Write-Host "  Available skills: uipath, uipath-desktop, uipath-planner, uipath-review (or '/skill off' to clear)" -ForegroundColor DarkGray
                 } elseif ($arg.ToLower() -eq "off" -or $arg.ToLower() -eq "none" -or $arg.ToLower() -eq "clear") {
                     $Script:Session.ActiveSkills.Clear()
                     Write-Host "  Cleared all active skills." -ForegroundColor Green

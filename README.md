@@ -20,9 +20,9 @@ A **zero-dependency, single-file agentic CLI coding assistant** designed specifi
 - **[First-Time Setup Guide (Start Here)](FIRST_TIME_SETUP.md)** — Simple 4-step walkthrough for first-time setup on a Windows AVD.
 - **[Windows AVD & Corporate VM Deployment Guide](docs/WINDOWS_AVD_GUIDE.md)** — How to transfer `pca` onto a restricted AVD via RDP Clipboard or Base64, bypass `ExecutionPolicy` without admin rights, compile `pca.exe` locally, and handle corporate proxies/firewalls.
 - **[Cheapest & Free ($0.00) LLM Providers Guide](docs/CHEAPEST_LLM_PROVIDERS.md)** — Step-by-step instructions to get free API keys (`github-models` on `*.azure.com`, `gemini`, `openrouter`, `groq`) and ultra-cheap cached models (`deepseek`, `openai`).
-- **[UiPath Skills & Automation Guide](docs/UIPATH_SKILLS_GUIDE.md)** — How to use `pca` with UiPath Studio `.xaml` workflows, `project.json`, `inspect_xaml` (90%+ token savings on large `.xaml` files), Selectors, VB.NET/C# LINQ, and Coded Workflows.
+- **[UiPath XAML & Desktop Automation Agent Guide](docs/UIPATH_SKILLS_GUIDE.md)** — How to use `pca` as a full UiPath XAML & Windows Desktop UI Automation Agent (`inspect_ui_tree`, `scaffold_xaml`, `inspect_xaml`, `validate_xaml`, and the `uipath`, `uipath-desktop`, `uipath-planner`, and `uipath-review` skills).
 - **[Usage & Practical Workflows Guide](docs/USAGE_AND_WORKFLOWS.md)** — Full command-line flags reference, interactive REPL slash commands, one-shot tasks, piping `git diff`/logs, and token-saving habits.
-- **[Architecture & Agentic Tool Protocol](docs/ARCHITECTURE_AND_TOOLS.md)** — How the built-in tools (`list_files`, `search_text`, `read_file`, `inspect_xaml`, `edit_file`, `run_command`), `SEARCH/REPLACE` patching, and prompt cache alignment work under the hood.
+- **[Architecture & Agentic Tool Protocol](docs/ARCHITECTURE_AND_TOOLS.md)** — How the built-in tools (`list_files`, `search_text`, `read_file`, `inspect_xaml`, `inspect_ui_tree`, `scaffold_xaml`, `validate_xaml`, `edit_file`, `run_command`), `SEARCH/REPLACE` patching, and prompt cache alignment work under the hood.
 
 ---
 
@@ -114,10 +114,12 @@ export GITHUB_TOKEN="ghp_your_token_here"
 | Command | Description |
 | :--- | :--- |
 | `/test [prov\|url]` | Test which AI endpoints are allowed or blocked by your corporate firewall/proxy |
+| `/uipath [plan\|review\|full]` | Activate UiPath XAML & Desktop UI Automation Agent mode (`uipath`, `uipath-desktop`, `uipath-planner`, `uipath-review`) |
+| `/key [api_key\|save]` | Set API key for current session or encrypt & save it permanently via Windows DPAPI (`/key save <api_key>`) |
 | `/provider [name]` | List all free/cheap providers or switch active provider on the fly (e.g. `/provider claude`, `/provider gemini`) |
 | `/model [name]` | View or switch the active model ID (e.g. `/model claude-sonnet-5-5`, `/model gemini-3.8-flash`) |
 | `/tier <cheap\|smart\|opus>` | Switch between `cheap` (Haiku/Flash-Lite), `smart` (Sonnet/Flash), and `opus` (Opus/Pro) tiers |
-| `/skill [name\|off]` | Activate a domain skill (e.g. `/skill uipath`) or turn skills off |
+| `/skill [name\|off]` | Activate a domain skill (e.g. `/skill uipath-desktop`) or turn skills off |
 | `/add <file>` | Pin a file to the cached system prompt context |
 | `/drop [file\|all]` | Unpin a file or clear all pinned files |
 | `/files` | Display workspace directory tree |

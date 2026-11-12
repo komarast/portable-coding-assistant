@@ -64,7 +64,30 @@ class MockLLMHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(raw)
             return
 
-        if "Tool Result for read_file" in last_user:
+        if "Tool Result for scaffold_xaml" in last_user:
+            reply = (
+                "Now inspecting the scaffolded workflow:\n"
+                "```pca-tool\n"
+                '{"tool": "inspect_xaml", "path": "Workflows/DesktopNotepad.xaml"}\n'
+                "```"
+            )
+        elif "Tool Result for inspect_xaml" in last_user:
+            reply = (
+                "Now validating Broken.xaml:\n"
+                "```pca-tool\n"
+                '{"tool": "validate_xaml", "path": "Workflows/Broken.xaml"}\n'
+                "```"
+            )
+        elif "Tool Result for validate_xaml" in last_user:
+            reply = f"Validation finished: {last_user.splitlines()[2] if len(last_user.splitlines()) > 2 else 'done'}"
+        elif "Scaffold DesktopNotepad.xaml" in last_user:
+            reply = (
+                "Scaffolding desktop UIA workflow:\n"
+                "```pca-tool\n"
+                '{"tool": "scaffold_xaml", "path": "Workflows/DesktopNotepad.xaml", "template": "desktop-uia", "app_exe": "notepad.exe", "window_title": "*Notepad*"}\n'
+                "```"
+            )
+        elif "Tool Result for read_file" in last_user:
             reply = (
                 "Now patching hello.txt:\n"
                 "```pca-tool\n"
@@ -200,6 +223,54 @@ class TestPortableCodingAssistant(unittest.TestCase):
             updated = target_file.read_text(encoding="utf-8")
             self.assertEqual(updated, "host = localhost\ntimeout = 30\nretries = 3\n")
 
+    def test_uipath_xaml_scaffold_inspect_and_validate(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            wf_dir = tmp_path / "Workflows"
+            wf_dir.mkdir(parents=True, exist_ok=True)
+            # Create a deliberately broken XAML missing ActivityAction inside NApplicationCard.Body
+            broken_xaml = wf_dir / "Broken.xaml"
+            broken_xaml.write_text(
+                '<Activity xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities" '
+                'xmlns:uix="http://schemas.uipath.com/workflow/activities/uix">\n'
+                '  <uix:NApplicationCard DisplayName="Use App">\n'
+                '    <uix:NApplicationCard.Body>\n'
+                '      <Sequence DisplayName="Missing ActivityAction Wrapper" />\n'
+                '    </uix:NApplicationCard.Body>\n'
+                '  </uix:NApplicationCard>\n'
+                '</Activity>\n',
+                encoding="utf-8",
+            )
+
+            url = f"http://127.0.0.1:{self.port}/v1/chat/completions"
+            proc = subprocess.run(
+                [
+                    str(PCA_SH),
+                    "--provider", "gemini",
+                    "--base-url", url,
+                    "--api-key", "test-key",
+                    "--skill", "uipath",
+                    "--skill", "uipath-desktop",
+                    "--auto-approve",
+                    "Scaffold DesktopNotepad.xaml",
+                ],
+                cwd=tmpdir,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertIn("[Tool: scaffold_xaml]", proc.stdout)
+            self.assertIn("[Tool: inspect_xaml]", proc.stdout)
+            self.assertIn("[Tool: validate_xaml]", proc.stdout)
+            self.assertIn("STATUS: FAILED", proc.stdout)
+
+            scaffolded = wf_dir / "DesktopNotepad.xaml"
+            self.assertTrue(scaffolded.is_file())
+            xaml_content = scaffolded.read_text(encoding="utf-8")
+            self.assertIn("<uix:NApplicationCard", xaml_content)
+            self.assertIn("<ActivityAction x:TypeArguments=\"x:Object\">", xaml_content)
+            self.assertIn("FullSelectorArgument=\"&lt;wnd app='notepad.exe'", xaml_content)
+
     def test_pure_bash_no_python_fallback(self):
         url = f"http://127.0.0.1:{self.port}/v1/chat/completions"
         env = os.environ.copy()
@@ -225,6 +296,11 @@ class TestPortableCodingAssistant(unittest.TestCase):
             "Invoke-ToolSearchText",
             "Invoke-ToolReadFile",
             "Invoke-ToolInspectXaml",
+            "Invoke-ToolInspectUiTree",
+            "Invoke-ToolValidateXaml",
+            "Invoke-ToolScaffoldXaml",
+            "Save-EncryptedApiKey",
+            "Get-EncryptedApiKey",
             "Get-SkillContent",
             "Get-ModelForTier",
             "Invoke-ToolEditFile",
@@ -239,10 +315,16 @@ class TestPortableCodingAssistant(unittest.TestCase):
         # Ensure pca.cmd exists and uses ExecutionPolicy Bypass
         cmd_content = PCA_CMD.read_text(encoding="utf-8")
         self.assertIn("-ExecutionPolicy Bypass", cmd_content)
-        # Ensure UiPath SKILL.md exists
-        uipath_skill = REPO_ROOT / "skills" / "uipath" / "SKILL.md"
-        self.assertTrue(uipath_skill.is_file())
-        self.assertIn("inspect_xaml", uipath_skill.read_text(encoding="utf-8"))
+        # Ensure all 4 UiPath SKILL.md files exist and are populated
+        for sk_dir, expected_kw in (
+            ("uipath", "NApplicationCard"),
+            ("uipath-desktop", "inspect_ui_tree"),
+            ("uipath-planner", "REFramework"),
+            ("uipath-review", "validate_xaml"),
+        ):
+            sk_file = REPO_ROOT / "skills" / sk_dir / "SKILL.md"
+            self.assertTrue(sk_file.is_file(), f"Missing skill file: {sk_file}")
+            self.assertIn(expected_kw, sk_file.read_text(encoding="utf-8"))
 
         # Verify PowerShell single/double quotes and here-strings are properly closed (no backtick-escaped closing quotes)
         in_squote = in_dquote = in_hered = in_heres = in_comment = False

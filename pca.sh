@@ -385,7 +385,7 @@ def tool_inspect_xaml(path: str) -> str:
         return f"Error: XAML file does not exist: {path}"
     lines = full.read_text(encoding="utf-8", errors="replace").splitlines()
     out = [f"=== UiPath XAML Outline: {rel_path(full)} ({len(lines)} total lines) ==="]
-    args_list, vars_list, acts_list = [], [], []
+    args_list, vars_list, acts_list, sels_list = [], [], [], []
     in_view_state = False
 
     for idx, ln in enumerate(lines, 1):
@@ -409,6 +409,15 @@ def tool_inspect_xaml(path: str) -> str:
         if m_var2:
             vars_list.append(f"  Line {idx:4d}: Variable {m_var2.group(1)} : {m_var2.group(2)}")
             continue
+        m_sel = re.search(r'(?:FullSelectorArgument|Selector)="([^"]+)"', ln)
+        if m_sel and len(sels_list) < 40:
+            s_val = (
+                m_sel.group(1)
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "'")
+            )
+            sels_list.append(f"  Line {idx:4d}: {s_val}")
         m_act = re.match(r'^\s*<([A-Za-z0-9_:]+)\s+[^>]*DisplayName="([^"]+)"', ln)
         if m_act:
             tag, disp = m_act.group(1), m_act.group(2)
@@ -416,7 +425,7 @@ def tool_inspect_xaml(path: str) -> str:
             m_wf = re.search(r'WorkflowFileName="([^"]+)"', ln)
             if m_wf:
                 extra = f" -> Calls: {m_wf.group(1)}"
-            elif 'Selector="' in ln:
+            elif 'Selector="' in ln or 'FullSelectorArgument="' in ln:
                 extra = " [Selector]"
             acts_list.append(f"  Line {idx:4d}: [{tag}] `{disp}`{extra}")
 
@@ -428,8 +437,240 @@ def tool_inspect_xaml(path: str) -> str:
     out.extend(acts_list[:120] or ["  (none with DisplayName)"])
     if len(acts_list) > 120:
         out.append(f"  ... ({len(acts_list) - 120} more activities)")
+    if sels_list:
+        out.append(f"UI Selectors ({len(sels_list)}):")
+        out.extend(sels_list)
     out.append("Tip: Use read_file with start_line/end_line around the specific Line number above before calling edit_file.")
     return "\n".join(out)
+
+
+def tool_inspect_ui_tree(window_title: str = "", max_depth: int = 3) -> str:
+    if sys.platform != "win32":
+        return (
+            "=== Windows UI Automation Tree Inspector ===\n"
+            "Note: Live Windows UIAutomationClient inspection requires Windows (.NET Framework / pca.ps1). "
+            f"Requested window_title='{window_title}', max_depth={max_depth}.\n"
+            "On Linux/macOS, craft selectors using standard UiPath attributes: "
+            "<wnd app='app.exe' title='*Window*' /><uia role='button' name='Submit' automationid='btnSubmit' />"
+        )
+    return "Run pca.ps1 on Windows to inspect live UIAutomationClient desktop elements."
+
+
+def tool_validate_xaml(path: str) -> str:
+    if not path:
+        return "Error: path is required."
+    full = safe_path(path)
+    if not full.is_file():
+        return f"Error: XAML file does not exist: {path}"
+    raw = full.read_text(encoding="utf-8", errors="replace")
+    errors = []
+    warnings = []
+
+    import xml.etree.ElementTree as ET
+    try:
+        ET.fromstring(raw)
+    except Exception as e:
+        errors.append(f"[XML Syntax Error] Not well-formed XML: {e}")
+
+    if "<uix:" in raw and "xmlns:uix=" not in raw:
+        errors.append("[Missing Namespace] File uses <uix:*> Modern UI activities but is missing xmlns:uix declaration on <Activity>.")
+    if "<ui:" in raw and "xmlns:ui=" not in raw:
+        errors.append("[Missing Namespace] File uses <ui:*> activities but is missing xmlns:ui declaration on <Activity>.")
+
+    scope_tags = [
+        "uix:NApplicationCard.Body",
+        "ui:WindowScope.Body",
+        "ui:BrowserScope.Body",
+        "ui:ExcelApplicationScope.Body",
+    ]
+    for st in scope_tags:
+        pattern = rf"<{re.escape(st)}>\s*<(?!ActivityAction\b)([A-Za-z0-9_:]+)"
+        m = re.search(pattern, raw)
+        if m:
+            errors.append(
+                f"[Invalid Scope Body] <{st}> contains <{m.group(1)}> directly without an <ActivityAction> wrapper. "
+                "UiPath Studio requires <ActivityAction><ActivityAction.Argument><DelegateInArgument .../></ActivityAction.Argument>...</ActivityAction>."
+            )
+
+    for m_fc in re.finditer(r"<Flowchart\b[^>]*>([\s\S]*?)</Flowchart>", raw):
+        fc_body = m_fc.group(1)
+        if re.search(r"<(Sequence|ui:Click|uix:NClick|Assign)\b", fc_body) and "<FlowStep" not in fc_body:
+            errors.append(
+                "[Invalid Flowchart Child] <Flowchart> cannot contain raw <Sequence> or activities directly; wrap each node in <FlowStep> and set <Flowchart.StartNode>."
+            )
+
+    if re.search(r"idx=['\"][2-9]\d*['\"]|idx=&quot;[2-9]\d*&quot;", raw):
+        warnings.append("[Fragile Selector (UI-ANA-001)] Selector uses volatile idx attribute (idx >= 2). Prefer automationid, name, or innertext.")
+    if re.search(r"<Delay\b", raw):
+        warnings.append("[Reliability (ST-REL-005)] Hardcoded <Delay> activity detected. Prefer <uix:NCheckAppState> or dynamic element timeout.")
+
+    proj_file = WORKSPACE / "project.json"
+    if proj_file.is_file():
+        proj_raw = proj_file.read_text(encoding="utf-8", errors="replace")
+        if '"expressionLanguage"' in proj_raw and "CSharp" in proj_raw:
+            if "VisualBasic.Settings" in raw and "CSharpValue" not in raw:
+                warnings.append("[Expression Language Mismatch] project.json uses CSharp, but XAML contains VisualBasic.Settings.")
+
+    out = [f"=== UiPath XAML Validation Report: {rel_path(full)} ==="]
+    if not errors and not warnings:
+        out.append("STATUS: PASSED (0 errors, 0 warnings) - Ready to open in UiPath Studio.")
+    elif not errors:
+        out.append(f"STATUS: PASSED WITH WARNINGS (0 errors, {len(warnings)} warning(s))")
+    else:
+        out.append(f"STATUS: FAILED ({len(errors)} error(s), {len(warnings)} warning(s))")
+    for err in errors:
+        out.append(f"  ERROR: {err}")
+    for w in warnings:
+        out.append(f"  WARN:  {w}")
+    return "\n".join(out)
+
+
+def tool_scaffold_xaml(
+    path: str,
+    template: str = "sequence",
+    app_exe: str = "notepad.exe",
+    window_title: str = "*Notepad*",
+) -> str:
+    if not path:
+        return "Error: path is required."
+    full = safe_path(path)
+    existed = full.is_file()
+    old_content = full.read_text(encoding="utf-8", errors="replace") if existed else ""
+    class_name = full.stem
+    tpl = (template or "sequence").lower()
+
+    if tpl in ("desktop", "desktop-uia", "uia"):
+        xaml = f"""<Activity mc:Ignorable="sap sap2010" x:Class="{class_name}"
+ xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+ xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+ xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
+ xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
+ xmlns:scg="clr-namespace:System.Collections.Generic;assembly=System.Private.CoreLib"
+ xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib"
+ xmlns:ui="http://schemas.uipath.com/workflow/activities"
+ xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <x:Members>
+    <x:Property Name="in_InputText" Type="InArgument(x:String)" />
+    <x:Property Name="out_ResultText" Type="OutArgument(x:String)" />
+  </x:Members>
+  <VisualBasic.Settings>
+    <x:Null />
+  </VisualBasic.Settings>
+  <Sequence DisplayName="{class_name}" sap2010:WorkflowViewState.IdRef="Sequence_1">
+    <Sequence.Variables>
+      <Variable x:TypeArguments="x:String" Default="" Name="str_Status" />
+    </Sequence.Variables>
+    <ui:LogMessage DisplayName="Log Start {class_name}" Level="Info" Message="[&quot;Starting desktop automation: {class_name}&quot;]" sap2010:WorkflowViewState.IdRef="LogMessage_1" />
+    <uix:NApplicationCard AttachMode="ByInstance" DisplayName="Use Desktop App - {app_exe}" InteractionMode="Simulate" OpenMode="IfNotOpen" ScopeGuid="d9a8f1b2-4c3e-4a1b-9f0e-123456789abc" Version="V2" sap2010:WorkflowViewState.IdRef="NApplicationCard_1">
+      <uix:NApplicationCard.Body>
+        <ActivityAction x:TypeArguments="x:Object">
+          <ActivityAction.Argument>
+            <DelegateInArgument x:TypeArguments="x:Object" Name="WSSessionData" />
+          </ActivityAction.Argument>
+          <Sequence DisplayName="Do Desktop Actions" sap2010:WorkflowViewState.IdRef="Sequence_2">
+            <uix:NTypeInto ActivateBefore="True" ClickBeforeMode="Single" DisplayName="Type Into Main Input" EmptyFieldMode="SingleLine" InteractionMode="Simulate" Text="[in_InputText]" Version="V3" sap2010:WorkflowViewState.IdRef="NTypeInto_1">
+              <uix:NTypeInto.Target>
+                <uix:TargetAnchorable FullSelectorArgument="&lt;wnd app='{app_exe}' title='{window_title}' /&gt;&lt;uia role='edit' /&gt;" SearchSteps="Selector" Version="V2" Visibility="Interactive" />
+              </uix:NTypeInto.Target>
+            </uix:NTypeInto>
+            <uix:NClick ActivateBefore="True" ClickType="Single" DisplayName="Click Submit Button" InteractionMode="Simulate" KeyModifiers="None" MouseButton="Left" Version="V3" sap2010:WorkflowViewState.IdRef="NClick_1">
+              <uix:NClick.Target>
+                <uix:TargetAnchorable FullSelectorArgument="&lt;wnd app='{app_exe}' title='{window_title}' /&gt;&lt;uia role='button' name='OK' /&gt;" SearchSteps="Selector" Version="V2" Visibility="Interactive" />
+              </uix:NClick.Target>
+            </uix:NClick>
+          </Sequence>
+        </ActivityAction>
+      </uix:NApplicationCard.Body>
+      <uix:NApplicationCard.TargetApp>
+        <uix:TargetApp FilePath="{app_exe}" Selector="&lt;wnd app='{app_exe}' title='{window_title}' /&gt;" />
+      </uix:NApplicationCard.TargetApp>
+    </uix:NApplicationCard>
+    <ui:LogMessage DisplayName="Log End {class_name}" Level="Info" Message="[&quot;Completed desktop automation: {class_name}&quot;]" sap2010:WorkflowViewState.IdRef="LogMessage_2" />
+  </Sequence>
+</Activity>
+"""
+    elif tpl in ("try-catch-process", "try-catch", "process"):
+        xaml = f"""<Activity mc:Ignorable="sap sap2010" x:Class="{class_name}"
+ xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+ xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+ xmlns:s="clr-namespace:System;assembly=System.Private.CoreLib"
+ xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
+ xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
+ xmlns:scg="clr-namespace:System.Collections.Generic;assembly=System.Private.CoreLib"
+ xmlns:ui="http://schemas.uipath.com/workflow/activities"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <x:Members>
+    <x:Property Name="in_TransactionItem" Type="InArgument(x:String)" />
+  </x:Members>
+  <VisualBasic.Settings>
+    <x:Null />
+  </VisualBasic.Settings>
+  <Sequence DisplayName="{class_name}" sap2010:WorkflowViewState.IdRef="Sequence_1">
+    <TryCatch DisplayName="Try Catch - {class_name}" sap2010:WorkflowViewState.IdRef="TryCatch_1">
+      <TryCatch.Try>
+        <Sequence DisplayName="Try Processing" sap2010:WorkflowViewState.IdRef="Sequence_2">
+          <ui:LogMessage DisplayName="Log Start" Level="Info" Message="[&quot;Processing item: &quot; &amp; in_TransactionItem]" sap2010:WorkflowViewState.IdRef="LogMessage_1" />
+        </Sequence>
+      </TryCatch.Try>
+      <TryCatch.Catches>
+        <Catch x:TypeArguments="ui:BusinessRuleException" sap2010:WorkflowViewState.IdRef="Catch_1">
+          <ActivityAction x:TypeArguments="ui:BusinessRuleException">
+            <ActivityAction.Argument>
+              <DelegateInArgument x:TypeArguments="ui:BusinessRuleException" Name="bre" />
+            </ActivityAction.Argument>
+            <Sequence DisplayName="Handle BusinessRuleException" sap2010:WorkflowViewState.IdRef="Sequence_3">
+              <ui:LogMessage DisplayName="Log BRE" Level="Warn" Message="[&quot;Business Rule Exception: &quot; &amp; bre.Message]" sap2010:WorkflowViewState.IdRef="LogMessage_2" />
+              <Rethrow DisplayName="Rethrow BRE" sap2010:WorkflowViewState.IdRef="Rethrow_1" />
+            </Sequence>
+          </ActivityAction>
+        </Catch>
+        <Catch x:TypeArguments="s:Exception" sap2010:WorkflowViewState.IdRef="Catch_2">
+          <ActivityAction x:TypeArguments="s:Exception">
+            <ActivityAction.Argument>
+              <DelegateInArgument x:TypeArguments="s:Exception" Name="exception" />
+            </ActivityAction.Argument>
+            <Sequence DisplayName="Handle System Exception" sap2010:WorkflowViewState.IdRef="Sequence_4">
+              <ui:LogMessage DisplayName="Log System Exception" Level="Error" Message="[&quot;System Exception: &quot; &amp; exception.Message]" sap2010:WorkflowViewState.IdRef="LogMessage_3" />
+              <Rethrow DisplayName="Rethrow System Exception" sap2010:WorkflowViewState.IdRef="Rethrow_2" />
+            </Sequence>
+          </ActivityAction>
+        </Catch>
+      </TryCatch.Catches>
+    </TryCatch>
+  </Sequence>
+</Activity>
+"""
+    else:
+        xaml = f"""<Activity mc:Ignorable="sap sap2010" x:Class="{class_name}"
+ xmlns="http://schemas.microsoft.com/netfx/2009/xaml/activities"
+ xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+ xmlns:sap="http://schemas.microsoft.com/netfx/2009/xaml/activities/presentation"
+ xmlns:sap2010="http://schemas.microsoft.com/netfx/2010/xaml/activities/presentation"
+ xmlns:scg="clr-namespace:System.Collections.Generic;assembly=System.Private.CoreLib"
+ xmlns:sco="clr-namespace:System.Collections.ObjectModel;assembly=System.Private.CoreLib"
+ xmlns:ui="http://schemas.uipath.com/workflow/activities"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <x:Members>
+    <x:Property Name="in_Config" Type="InArgument(scg:Dictionary(x:String, x:Object))" />
+  </x:Members>
+  <VisualBasic.Settings>
+    <x:Null />
+  </VisualBasic.Settings>
+  <Sequence DisplayName="{class_name}" sap2010:WorkflowViewState.IdRef="Sequence_1">
+    <Sequence.Variables>
+      <Variable x:TypeArguments="x:String" Default="" Name="str_Result" />
+    </Sequence.Variables>
+    <ui:LogMessage DisplayName="Log Start {class_name}" Level="Info" Message="[&quot;Starting workflow: {class_name}&quot;]" sap2010:WorkflowViewState.IdRef="LogMessage_1" />
+  </Sequence>
+</Activity>
+"""
+
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_text(xaml, encoding="utf-8")
+    SESSION.undo_stack.append({"path": full, "existed": existed, "old_content": old_content})
+    val_report = tool_validate_xaml(path)
+    return f"Successfully scaffolded '{rel_path(full)}' using template '{tpl}'.\n{val_report}"
 
 
 def get_skill_content(skill_name: str) -> str:
@@ -462,10 +703,10 @@ def undo_last_edit():
 
 
 def build_system_prompt() -> str:
-    sys_prompt = """You are PCA (Portable Coding Assistant), an expert, token-efficient coding agent.
+    sys_prompt = """You are PCA (Portable Coding Assistant), an expert, token-efficient coding & UiPath XAML/Desktop Automation agent.
 Be concise, accurate, and surgical. Minimize unnecessary prose and avoid repeating unchanged code.
 
-When you need to inspect files, search code, edit files, or run commands, emit a fenced tool block using this exact JSON format:
+When you need to inspect files, search code, inspect/scaffold/validate UiPath XAML, inspect live Windows desktop UI trees, edit files, or run commands, emit a fenced tool block using this exact JSON format:
 ```pca-tool
 {"tool": "list_files", "sub_dir": ".", "max_depth": 2}
 ```
@@ -473,14 +714,17 @@ Available tools:
 1. list_files: {"tool": "list_files", "sub_dir": ".", "max_depth": 2}
 2. search_text: {"tool": "search_text", "pattern": "regex", "sub_dir": "."}
 3. read_file: {"tool": "read_file", "path": "relative/path", "start_line": 1, "end_line": 120}
-4. inspect_xaml: {"tool": "inspect_xaml", "path": "Main.xaml"} (Extracts UiPath .xaml Arguments, Variables & Activity line numbers, skipping ViewState noise)
-5. edit_file: {"tool": "edit_file", "path": "relative/path", "search": "exact existing lines", "replace": "new lines"}
+4. inspect_xaml: {"tool": "inspect_xaml", "path": "Main.xaml"} (Extracts UiPath .xaml Arguments, Variables, Activity line numbers & UI Selectors, skipping ViewState noise)
+5. inspect_ui_tree: {"tool": "inspect_ui_tree", "window_title": "Notepad", "max_depth": 3} (Inspects live Windows desktop UI Automation control tree and synthesizes UiPath <wnd/><uia/> selectors)
+6. scaffold_xaml: {"tool": "scaffold_xaml", "path": "Workflows/DesktopAction.xaml", "template": "desktop-uia", "app_exe": "notepad.exe", "window_title": "*Notepad*"} (Templates: "sequence", "desktop-uia", "try-catch-process")
+7. validate_xaml: {"tool": "validate_xaml", "path": "Main.xaml"} (Validates XAML XML syntax, namespaces, ActivityAction scope wrappers, and UiPath Studio analyzer rules)
+8. edit_file: {"tool": "edit_file", "path": "relative/path", "search": "exact existing lines", "replace": "new lines"}
    (To create a new file, set "search": "" and put full file content in "replace".)
-6. run_command: {"tool": "run_command", "command": "shell command"}
+9. run_command: {"tool": "run_command", "command": "shell command"}
 
-Rules for Token Efficiency:
+Rules for Token Efficiency & UiPath XAML Quality:
 - Never dump or rewrite an entire large file when a small SEARCH/REPLACE block in edit_file suffices.
-- For UiPath `.xaml` files, call `inspect_xaml` first to locate exact activity line numbers, then `read_file` only that small line range.
+- For UiPath `.xaml` files, follow the 3-Phase Loop: (1) Discovery (`inspect_xaml` / `inspect_ui_tree`), (2) Generation (`scaffold_xaml` / `edit_file`), (3) Validation (always call `validate_xaml` after modifying `.xaml`).
 - Emit at most ONE ```pca-tool``` block per turn when waiting for tool output, then wait for the [Tool Result] before continuing."""
     for sk in SESSION.active_skills:
         sk_text = get_skill_content(sk)
@@ -659,6 +903,20 @@ def dispatch_tool(tool_call: dict) -> str:
         )
     if name == "inspect_xaml":
         return tool_inspect_xaml(tool_call.get("path", ""))
+    if name == "inspect_ui_tree":
+        return tool_inspect_ui_tree(
+            str(tool_call.get("window_title", "")),
+            int(tool_call.get("max_depth", 3)),
+        )
+    if name == "validate_xaml":
+        return tool_validate_xaml(tool_call.get("path", ""))
+    if name == "scaffold_xaml":
+        return tool_scaffold_xaml(
+            tool_call.get("path", ""),
+            tool_call.get("template", "sequence"),
+            tool_call.get("app_exe", "notepad.exe"),
+            tool_call.get("window_title", "*Notepad*"),
+        )
     if name == "edit_file":
         return tool_edit_file(
             tool_call.get("path", ""),
@@ -931,11 +1189,13 @@ def load_config_and_args(argv):
 
     # Auto-detect UiPath project
     uipath_proj = WORKSPACE / "project.json"
-    if uipath_proj.is_file() and "uipath" not in SESSION.active_skills:
+    if uipath_proj.is_file():
         try:
             raw_proj = uipath_proj.read_text(encoding="utf-8", errors="ignore")
             if "UiPath" in raw_proj or "expressionLanguage" in raw_proj:
-                SESSION.active_skills.append("uipath")
+                for auto_sk in ("uipath", "uipath-desktop"):
+                    if auto_sk not in SESSION.active_skills:
+                        SESSION.active_skills.append(auto_sk)
         except OSError:
             pass
 
@@ -975,7 +1235,7 @@ def main():
 
     skills_str = ", ".join(SESSION.active_skills) if SESSION.active_skills else "none"
     print(f"\n  PCA v{VERSION} - Portable Coding Assistant | Provider: {SESSION.provider} | Model: {SESSION.model} | Skills: {skills_str}")
-    print("  Type '/help' for commands, '/test' to check firewall, '/skill uipath' for UiPath mode, or '/exit' to quit.\n")
+    print("  Type '/help' for commands, '/test' to check firewall, '/uipath' for UiPath XAML & Desktop mode, or '/exit' to quit.\n")
     while True:
         try:
             line = input(f"pca ({SESSION.provider}:{SESSION.tier})> ").strip()
@@ -990,9 +1250,34 @@ def main():
             if cmd in ("/exit", "/quit"):
                 break
             elif cmd == "/help":
-                print("  Commands: /test [prov|url], /provider [name], /model [name], /tier [cheap|smart|opus], /skill [name|off], /add <file>, /drop, /files, /undo, /compact, /cost, /clear, /exit")
+                print("  Commands: /test [prov|url], /uipath [plan|review|full], /provider [name], /model [name], /tier [cheap|smart|opus], /skill [name|off], /add <file>, /drop, /files, /undo, /compact, /cost, /clear, /exit")
             elif cmd == "/test":
                 run_endpoint_tests(arg)
+            elif cmd == "/uipath":
+                sub = arg.lower()
+                if sub in ("off", "none", "clear"):
+                    SESSION.active_skills.clear()
+                    print("  Cleared all active skills.")
+                elif sub == "plan":
+                    for s in ("uipath", "uipath-desktop", "uipath-planner"):
+                        if s not in SESSION.active_skills:
+                            SESSION.active_skills.append(s)
+                    print(f"  Activated UiPath Planner mode: {', '.join(SESSION.active_skills)}")
+                elif sub == "review":
+                    for s in ("uipath", "uipath-desktop", "uipath-review"):
+                        if s not in SESSION.active_skills:
+                            SESSION.active_skills.append(s)
+                    print(f"  Activated UiPath Reviewer mode: {', '.join(SESSION.active_skills)}")
+                elif sub in ("full", "all"):
+                    for s in ("uipath", "uipath-desktop", "uipath-planner", "uipath-review"):
+                        if s not in SESSION.active_skills:
+                            SESSION.active_skills.append(s)
+                    print(f"  Activated full UiPath XAML & Desktop Automation suite: {', '.join(SESSION.active_skills)}")
+                else:
+                    for s in ("uipath", "uipath-desktop"):
+                        if s not in SESSION.active_skills:
+                            SESSION.active_skills.append(s)
+                    print(f"  Activated UiPath XAML & Desktop Automation mode: {', '.join(SESSION.active_skills)}")
             elif cmd == "/skill":
                 if not arg:
                     print(f"  Active skills: {', '.join(SESSION.active_skills) or 'none'}")
