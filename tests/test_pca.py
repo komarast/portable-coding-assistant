@@ -187,6 +187,65 @@ class TestPortableCodingAssistant(unittest.TestCase):
         self.assertTrue(uipath_skill.is_file())
         self.assertIn("inspect_xaml", uipath_skill.read_text(encoding="utf-8"))
 
+        # Verify PowerShell single/double quotes and here-strings are properly closed (no backtick-escaped closing quotes)
+        in_squote = in_dquote = in_hered = in_heres = in_comment = False
+        i = 0
+        n = len(content)
+        while i < n:
+            ch = content[i]
+            if ch == "\n":
+                in_comment = False
+                i += 1
+                continue
+            if in_comment:
+                i += 1
+                continue
+            if in_heres:
+                if content[i - 1 : i + 2] == "\n'@":
+                    in_heres = False
+                    i += 2
+                    continue
+                i += 1
+                continue
+            if in_hered:
+                if content[i - 1 : i + 2] == '\n"@':
+                    in_hered = False
+                    i += 2
+                    continue
+                i += 1
+                continue
+            if not in_squote and not in_dquote:
+                if ch == "#":
+                    in_comment = True
+                elif content[i : i + 3] == "@'\n":
+                    in_heres = True
+                    i += 2
+                elif content[i : i + 3] == '@"\n':
+                    in_hered = True
+                    i += 2
+                elif ch == "'":
+                    in_squote = True
+                elif ch == '"':
+                    in_dquote = True
+            elif in_squote:
+                if ch == "'":
+                    if i + 1 < n and content[i + 1] == "'":
+                        i += 2
+                        continue
+                    in_squote = False
+            elif in_dquote:
+                if ch == "`":
+                    i += 2
+                    continue
+                if ch == '"':
+                    in_dquote = False
+            i += 1
+        self.assertFalse(
+            in_squote or in_dquote or in_heres or in_hered,
+            "Unclosed string or here-string detected in pca.ps1",
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

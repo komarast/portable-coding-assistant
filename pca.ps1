@@ -760,7 +760,7 @@ public class PcaLauncher {
                 $extra = ""
                 if ($ln -match 'WorkflowFileName="([^"]+)"') { $extra = " -> Calls: $($Matches[1])" }
                 elseif ($ln -match 'Selector="([^"]+)"') { $extra = " [Selector]" }
-                $actsList.Add(("  Line {0,4}: [{1}] `{2}`{3}" -f $lineNum, $tag, $disp, $extra))
+                $actsList.Add(('  Line {0,4}: [{1}] `{2}`{3}' -f $lineNum, $tag, $disp, $extra))
             }
         }
 
@@ -792,12 +792,12 @@ public class PcaLauncher {
             }
         }
         if ($SkillName -eq "uipath") {
-            return @"
+            return @'
 # UiPath Studio & Robot Built-in Skill
 - Always call `inspect_xaml` first on `.xaml` files to get Arguments, Variables, and Activity line numbers without wasting tokens on ViewState XML.
 - Check `project.json` for `expressionLanguage` (`VisualBasic` vs `CSharp`) and never mix VB.NET (`Nothing`, `AndAlso`, `Function(x)`) with C# (`null`, `&&`, `x =>`).
 - Preserve XML tag balance and namespaces when patching `.xaml` files with `edit_file`.
-"@
+'@
         }
         return ""
     }
@@ -824,7 +824,7 @@ public class PcaLauncher {
     # =========================================================================
     function Build-SystemPrompt {
         # Static instructions come first for 100% prefix cache hits on DeepSeek / OpenAI / Gemini
-        $sys = @"
+        $sys = @'
 You are PCA (Portable Coding Assistant), an expert, token-efficient coding agent running on a Windows corporate/AVD environment.
 Be concise, accurate, and surgical. Minimize unnecessary prose and avoid repeating unchanged code.
 
@@ -845,7 +845,7 @@ Rules for Token Efficiency:
 - Never dump or rewrite an entire large file when a small SEARCH/REPLACE block in edit_file suffices.
 - For UiPath `.xaml` files, call `inspect_xaml` first to locate exact activity line numbers, then `read_file` only that small line range.
 - Emit at most ONE ```pca-tool``` block per turn when waiting for tool output, then wait for the [Tool Result] before continuing.
-"@
+'@
         if ($Script:Session.ActiveSkills.Count -gt 0) {
             foreach ($sk in $Script:Session.ActiveSkills) {
                 $skText = Get-SkillContent -SkillName $sk
@@ -1519,7 +1519,8 @@ Rules for Token Efficiency:
             if ($pipedText.Length -gt 12000) {
                 $pipedText = $pipedText.Substring(0, 12000) + "`n... [Piped input truncated to 12,000 chars to save tokens]"
             }
-            $combinedPrompt = "$initialPrompt`n`n--- Piped Input ---`n```text`n$pipedText`n```"
+            $fence = '```'
+            $combinedPrompt = "$initialPrompt`n`n--- Piped Input ---`n$($fence)text`n$pipedText`n$fence"
         }
         Invoke-AgentTurn -UserMessage $combinedPrompt.Trim()
         return
