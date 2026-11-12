@@ -730,9 +730,10 @@ public class PcaLauncher {
             return "User declined executing command: $Command"
         }
         try {
+            $escapedCmd = $Command.Replace('"', '\"')
             $psi = New-Object System.Diagnostics.ProcessStartInfo
             $psi.FileName = "powershell.exe"
-            $psi.Arguments = "-NoLogo -NoProfile -NonInteractive -Command `"$($Command.Replace('"', '\"'))`""
+            $psi.Arguments = "-NoLogo -NoProfile -NonInteractive -Command `"$escapedCmd`""
             $psi.WorkingDirectory = $Script:WorkspaceRoot
             $psi.RedirectStandardOutput = $true
             $psi.RedirectStandardError = $true
@@ -921,8 +922,11 @@ public class PcaLauncher {
                     $role  = $cType.ToLower()
                     $indent = "  " * $Depth
                     $selParts = New-Object System.Collections.Generic.List[string]
-                    if (-not [string]::IsNullOrEmpty($cId))   { $selParts.Add("automationid='$cId'") }
-                    if (-not [string]::IsNullOrEmpty($cName)) { $selParts.Add("name='$($cName -replace "'", "")'") }
+                    if (-not [string]::IsNullOrEmpty($cId)) { $selParts.Add("automationid='$cId'") }
+                    if (-not [string]::IsNullOrEmpty($cName)) {
+                        $cleanName = $cName.Replace("'", "")
+                        $selParts.Add("name='$cleanName'")
+                    }
                     $selParts.Add("role='$role'")
                     $uiaSel = "<uia " + ($selParts -join " ") + " />"
                     if (-not [string]::IsNullOrEmpty($cName) -or -not [string]::IsNullOrEmpty($cId)) {
@@ -1913,13 +1917,24 @@ Rules for Token Efficiency & UiPath XAML Quality:
                 }
             }
             "/uipath" {
-                foreach ($sk in @("uipath", "uipath-desktop")) {
-                    if (-not $Script:Session.ActiveSkills.Contains($sk)) {
-                        $Script:Session.ActiveSkills.Add($sk)
+                $sub = $arg.ToLower()
+                if ($sub -in @("off", "none", "clear")) {
+                    $Script:Session.ActiveSkills.Clear()
+                    Write-Host "  Cleared all active skills." -ForegroundColor Green
+                } else {
+                    $toAdd = @("uipath", "uipath-desktop")
+                    if ($sub -eq "plan")   { $toAdd = @("uipath", "uipath-desktop", "uipath-planner") }
+                    if ($sub -eq "review") { $toAdd = @("uipath", "uipath-desktop", "uipath-review") }
+                    if ($sub -in @("full", "all")) { $toAdd = @("uipath", "uipath-desktop", "uipath-planner", "uipath-review") }
+                    foreach ($sk in $toAdd) {
+                        if (-not $Script:Session.ActiveSkills.Contains($sk)) {
+                            $Script:Session.ActiveSkills.Add($sk)
+                        }
                     }
+                    $activeStr = $Script:Session.ActiveSkills -join ", "
+                    Write-Host "  Activated UiPath XAML & Desktop Automation Agent skills: $activeStr" -ForegroundColor Green
+                    Write-Host "  Sub-modes: /uipath | /uipath plan | /uipath review | /uipath full | /uipath off" -ForegroundColor DarkGray
                 }
-                Write-Host "  Activated UiPath XAML & Desktop Automation Agent skills: $($Script:Session.ActiveSkills -join ', ')" -ForegroundColor Green
-                Write-Host "  Additional UiPath skills available via /skill: uipath-planner, uipath-review" -ForegroundColor DarkGray
             }
             "/skill" {
                 if ([string]::IsNullOrEmpty($arg)) {
@@ -1946,7 +1961,7 @@ Rules for Token Efficiency & UiPath XAML Quality:
                     $Script:Session.Provider = $pArg
                     $cat = $Script:ProviderCatalog[$Script:Session.Provider]
                     $Script:Session.BaseUrl = $cat.BaseUrl
-                    $Script:Session.Model = Get-ModelForTier -CatalogEntry $cat -TierName $Script:Session.Tier
+                    $Script:Session.Model = Get-ModelForTier -Cat $cat -TierName $Script:Session.Tier
                     $envKeyVal = [Environment]::GetEnvironmentVariable($cat.EnvKey)
                     if ([string]::IsNullOrEmpty($envKeyVal)) { $envKeyVal = Get-EncryptedApiKey -ProviderName $Script:Session.Provider }
                     if (-not [string]::IsNullOrEmpty($envKeyVal)) { $Script:Session.ApiKey = $envKeyVal }
@@ -1969,7 +1984,7 @@ Rules for Token Efficiency & UiPath XAML Quality:
                     $Script:Session.Tier = if ($tArg -eq "haiku") { "cheap" } elseif ($tArg -eq "sonnet") { "smart" } else { $tArg }
                     $cat = $Script:ProviderCatalog[$Script:Session.Provider]
                     if ($cat) {
-                        $Script:Session.Model = Get-ModelForTier -CatalogEntry $cat -TierName $Script:Session.Tier
+                        $Script:Session.Model = Get-ModelForTier -Cat $cat -TierName $Script:Session.Tier
                     }
                     Write-Host "  Switched tier to '$($Script:Session.Tier)' (model: $($Script:Session.Model))." -ForegroundColor Green
                 } else {
@@ -1978,7 +1993,8 @@ Rules for Token Efficiency & UiPath XAML Quality:
             }
             "/add" {
                 if ([string]::IsNullOrEmpty($arg)) {
-                    Write-Host "  Pinned files: $($Script:Session.PinnedFiles -join ', ')" -ForegroundColor Cyan
+                    $pinnedStr = $Script:Session.PinnedFiles -join ", "
+                    Write-Host "  Pinned files: $pinnedStr" -ForegroundColor Cyan
                 } else {
                     $Script:Session.PinnedFiles.Add($arg)
                     Write-Host "  Pinned '$arg' to context." -ForegroundColor Green

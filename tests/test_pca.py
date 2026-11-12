@@ -326,14 +326,24 @@ class TestPortableCodingAssistant(unittest.TestCase):
             self.assertTrue(sk_file.is_file(), f"Missing skill file: {sk_file}")
             self.assertIn(expected_kw, sk_file.read_text(encoding="utf-8"))
 
-        # Verify PowerShell single/double quotes and here-strings are properly closed (no backtick-escaped closing quotes)
-        in_squote = in_dquote = in_hered = in_heres = in_comment = False
+        # Verify PowerShell single/double quotes, here-strings, braces/parens, and $() subexpressions are 100% PS 5.1 valid
+        in_squote = in_dquote = in_hered = in_heres = in_comment = in_block_comment = False
+        braces = parens = brackets = 0
+        line_num = 1
         i = 0
         n = len(content)
         while i < n:
             ch = content[i]
             if ch == "\n":
+                line_num += 1
                 in_comment = False
+                i += 1
+                continue
+            if in_block_comment:
+                if content[i : i + 2] == "#>":
+                    in_block_comment = False
+                    i += 2
+                    continue
                 i += 1
                 continue
             if in_comment:
@@ -354,7 +364,11 @@ class TestPortableCodingAssistant(unittest.TestCase):
                 i += 1
                 continue
             if not in_squote and not in_dquote:
-                if ch == "#":
+                if content[i : i + 2] == "<#":
+                    in_block_comment = True
+                    i += 2
+                    continue
+                elif ch == "#":
                     in_comment = True
                 elif content[i : i + 3] == "@'\n":
                     in_heres = True
@@ -366,6 +380,20 @@ class TestPortableCodingAssistant(unittest.TestCase):
                     in_squote = True
                 elif ch == '"':
                     in_dquote = True
+                elif ch == "{":
+                    braces += 1
+                elif ch == "}":
+                    braces -= 1
+                    self.assertGreaterEqual(braces, 0, f"Unmatched closing brace at line {line_num}")
+                elif ch == "(":
+                    parens += 1
+                elif ch == ")":
+                    parens -= 1
+                    self.assertGreaterEqual(parens, 0, f"Unmatched closing paren at line {line_num}")
+                elif ch == "[":
+                    brackets += 1
+                elif ch == "]":
+                    brackets -= 1
             elif in_squote:
                 if ch == "'":
                     if i + 1 < n and content[i + 1] == "'":
@@ -376,6 +404,19 @@ class TestPortableCodingAssistant(unittest.TestCase):
                 if ch == "`":
                     i += 2
                     continue
+                if content[i : i + 2] == "$(":
+                    sub_end = content.find(")", i + 2)
+                    sub_str = content[i + 2 : sub_end] if sub_end != -1 else ""
+                    self.assertNotIn(
+                        '"',
+                        sub_str,
+                        f"Nested double quote inside $() subexpression at line {line_num}: {sub_str}",
+                    )
+                    self.assertNotIn(
+                        "'",
+                        sub_str,
+                        f"Nested single quote inside $() subexpression at line {line_num}: {sub_str}",
+                    )
                 if ch == '"':
                     in_dquote = False
             i += 1
@@ -383,6 +424,9 @@ class TestPortableCodingAssistant(unittest.TestCase):
             in_squote or in_dquote or in_heres or in_hered,
             "Unclosed string or here-string detected in pca.ps1",
         )
+        self.assertEqual(braces, 0, f"Unbalanced curly braces in pca.ps1: {braces}")
+        self.assertEqual(parens, 0, f"Unbalanced parentheses in pca.ps1: {parens}")
+        self.assertEqual(brackets, 0, f"Unbalanced square brackets in pca.ps1: {brackets}")
 
 
 if __name__ == "__main__":
