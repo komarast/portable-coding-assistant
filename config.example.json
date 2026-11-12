@@ -1,6 +1,6 @@
 {
   "_comment": "Copy this file to .pca.json in your workspace or home directory (%USERPROFILE%\\.pca.json on Windows AVD).",
-  "provider": "github-models",
+  "provider": "gemini",
   "tier": "cheap",
   "model": "",
   "api_key": "",
@@ -11,7 +11,7 @@
   "auto_approve": false,
   "_provider_examples": {
     "github-models": {
-      "description": "FREE ($0) with a GitHub Personal Access Token (models:read). Hosted on models.github.ai.",
+      "description": "RETIRED: GitHub permanently shut down the GitHub Models API on July 30, 2026. Use gemini, openrouter, or groq instead.",
       "base_url": "https://models.github.ai/inference/chat/completions",
       "cheap_model": "openai/gpt-4o-mini",
       "smart_model": "openai/gpt-4o",

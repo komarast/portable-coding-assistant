@@ -32,14 +32,14 @@ A **zero-dependency, single-file agentic CLI coding assistant** designed specifi
 
 | Provider (`-Provider`) | Default Cheap Model | Smart Model (`-Tier smart`) | Cost / 1M Tokens | Why Use It on Corporate AVD? |
 | :--- | :--- | :--- | :--- | :--- |
-| **`github-models`** *(Default)* | `openai/gpt-4o-mini` | `openai/gpt-4o` | **$0.00 (FREE)** | Uses any GitHub Personal Access Token (`GITHUB_TOKEN`). Hosted on **`models.github.ai`** (`https://models.github.ai/inference/chat/completions`). |
-| **`gemini`** | `gemini-3.5-flash-lite` | `gemini-3.8-flash` | **$0.00 (FREE)** / $0.75 intro | Free tier via Google AI Studio (`GEMINI_API_KEY`) with 1M context window and `gemini-3.8-flash` agentic coding model. |
+| **`gemini`** *(Default)* | `gemini-3.5-flash-lite` | `gemini-3.8-flash` | **$0.00 (FREE)** / $0.75 intro | Free tier via Google AI Studio (`GEMINI_API_KEY`) with 1M context window and `gemini-3.8-flash` agentic coding model. Hosted on `*.googleapis.com`. |
 | **`openrouter`** | `qwen/qwen3-coder:free` | `deepseek/deepseek-chat-v3-0324:free` | **$0.00 (FREE)** | Free coding models via `OPENROUTER_API_KEY`. |
 | **`groq`** | `llama-3.1-8b-instant` | `llama-3.3-70b-versatile` | **$0.00 (FREE)** | Free developer tier (`GROQ_API_KEY`) with ~500 tok/s speed. |
 | **`deepseek`** | `deepseek-chat` (V3) | `deepseek-reasoner` (R1) | **$0.07** cached in | Automatic disk prompt caching cuts multi-turn coding costs by 75%. |
 | **`openai`** | `gpt-4.1-nano` | `gpt-4.1-mini` | **$0.10** in (`$0.025` cached) | Ultra-low-cost OpenAI nano/mini models. |
 | **`azure-openai`** | `gpt-4o-mini` | `gpt-4o` | Corporate Gateway | Connect to your company's internal Azure OpenAI endpoint. |
 | **`ollama`** | `qwen2.5-coder:7b` | `qwen2.5-coder:14b` | **$0.00 (Local)** | 100% air-gapped local inference. |
+| ~~`github-models`~~ | `openai/gpt-4o-mini` | `openai/gpt-4o` | *Retired Jul 30, 2026* | *Note: GitHub permanently shut down the GitHub Models inference API on July 30, 2026.* |
 
 ---
 

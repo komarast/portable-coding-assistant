@@ -30,17 +30,6 @@ IGNORED_DIRS = {
 }
 
 PROVIDER_CATALOG = {
-    "github-models": {
-        "name": "GitHub Models (models.github.ai - FREE)",
-        "base_url": "https://models.github.ai/inference/chat/completions",
-        "env_key": "GITHUB_TOKEN",
-        "cheap_model": "openai/gpt-4o-mini",
-        "smart_model": "openai/gpt-4o",
-        "in_cost": 0.00,
-        "cached_cost": 0.00,
-        "out_cost": 0.00,
-        "notes": "FREE ($0) with any GitHub PAT (models:read). Hosted on models.github.ai."
-    },
     "gemini": {
         "name": "Google Gemini AI Studio (Gemini 3.8 Flash / 3.5 Flash-Lite)",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
@@ -50,7 +39,7 @@ PROVIDER_CATALOG = {
         "in_cost": 0.00,
         "cached_cost": 0.00,
         "out_cost": 0.00,
-        "notes": "Supports gemini-3.8-flash & gemini-3.5-flash-lite via Google AI Studio (Free Tier or $0.75/1M intro rate)."
+        "notes": "DEFAULT: Supports gemini-3.8-flash & gemini-3.5-flash-lite via Google AI Studio (Free Tier or $0.75/1M intro rate)."
     },
     "openrouter": {
         "name": "OpenRouter (Free Coding Models)",
@@ -118,12 +107,23 @@ PROVIDER_CATALOG = {
         "out_cost": 0.00,
         "notes": "100% offline/local inference."
     },
+    "github-models": {
+        "name": "GitHub Models (RETIRED by GitHub on July 30, 2026)",
+        "base_url": "https://models.github.ai/inference/chat/completions",
+        "env_key": "GITHUB_TOKEN",
+        "cheap_model": "openai/gpt-4o-mini",
+        "smart_model": "openai/gpt-4o",
+        "in_cost": 0.00,
+        "cached_cost": 0.00,
+        "out_cost": 0.00,
+        "notes": "RETIRED: GitHub shut down GitHub Models API on July 30, 2026 (returns plain 'OK'). Use gemini, openrouter, or groq."
+    },
 }
 
 
 class Session:
     def __init__(self):
-        self.provider = "github-models"
+        self.provider = "gemini"
         self.tier = "cheap"
         self.model = ""
         self.api_key = ""
@@ -509,6 +509,14 @@ def llm_chat_completion(messages: list) -> dict:
         err_body = e.read().decode("utf-8", errors="ignore")
         raise RuntimeError(f"LLM API HTTP {e.code}: {err_body}")
 
+    if not resp_text.strip().startswith("{"):
+        if "models.github.ai" in SESSION.base_url or "models.inference.ai.azure.com" in SESSION.base_url:
+            raise RuntimeError(
+                f"GitHub permanently retired the GitHub Models API on July 30, 2026 (endpoint returned plain '{resp_text.strip()}'). "
+                "Switch to a free active provider: --provider gemini (Google AI Studio Free Tier), --provider openrouter, or --provider groq."
+            )
+        raise RuntimeError(f"LLM API returned non-JSON response from {SESSION.base_url}: {resp_text[:200]}")
+
     parsed = json.loads(resp_text)
     reply_text = ""
     choices = parsed.get("choices") or []
@@ -652,6 +660,12 @@ def test_single_endpoint(name: str, url: str, model_name: str, env_key: str) -> 
                     "provider": name, "host": host_name, "status": "BLOCKED (HTML Block Page)",
                     "allowed": False, "ready": False, "ms": ms, "proxy": proxy_url
                 }
+            if "json" not in ct.lower() and not body.strip().startswith("{"):
+                st = "RETIRED (Shut down Jul 2026)" if "models.github.ai" in host_name else "BLOCKED (Non-JSON HTTP 200)"
+                return {
+                    "provider": name, "host": host_name, "status": st,
+                    "allowed": False, "ready": False, "ms": ms, "proxy": proxy_url
+                }
             return {
                 "provider": name, "host": host_name, "status": "ALLOWED (Key Valid & Ready)",
                 "allowed": True, "ready": True, "ms": ms, "proxy": proxy_url
@@ -716,7 +730,7 @@ def run_endpoint_tests(target: str = ""):
             print(f"  Unknown provider or URL '{target}'.")
             return
     else:
-        for k in ("github-models", "gemini", "openrouter", "groq", "deepseek", "openai"):
+        for k in ("gemini", "openrouter", "groq", "deepseek", "openai", "github-models"):
             p = PROVIDER_CATALOG[k]
             targets.append((k, p["base_url"], p["cheap_model"], p["env_key"]))
         if SESSION.base_url and SESSION.provider == "azure-openai":
@@ -764,7 +778,7 @@ def load_config_and_args(argv):
                 SESSION.provider = k
                 break
         else:
-            SESSION.provider = "github-models"
+            SESSION.provider = "gemini"
 
     SESSION.tier = os.environ.get("PCA_TIER", file_cfg.get("tier", "cheap")).lower()
     for sk in file_cfg.get("skills", []):

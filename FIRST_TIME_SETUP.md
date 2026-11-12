@@ -39,16 +39,19 @@ powershell -ExecutionPolicy Bypass -File .\pca.ps1 -TestEndpoints
 ```
 
 You will see a table showing which AI endpoints are **`ALLOWED`** and which are **`BLOCKED`** on your corporate network:
-- If **`github-models`** (`models.github.ai`) says **`ALLOWED`** -> Use a free **GitHub Token**.
-- If **`gemini`** (`generativelanguage.googleapis.com`) says **`ALLOWED`** -> Use a free **Google AI Studio Key**.
+- If **`gemini`** (`generativelanguage.googleapis.com`) says **`ALLOWED`** -> Use a free **Google AI Studio Key** (`GEMINI_API_KEY`).
+- If **`openrouter`** (`openrouter.ai`) says **`ALLOWED`** -> Use a free **OpenRouter Key** (`OPENROUTER_API_KEY`).
+- If **`groq`** (`api.groq.com`) says **`ALLOWED`** -> Use a free **Groq Developer Key** (`GROQ_API_KEY`).
+*(Note: GitHub permanently retired the free `github-models` API on July 30, 2026.)*
 
 ---
 
 ## Step 3: Get a Free ($0.00) API Key & Save It Securely
 
 1. Get a free key (you can generate this on your personal PC or phone if your AVD browser blocks sign-up pages):
-   - **For `github-models` (Free)**: Go to GitHub -> **Settings** -> **Developer settings** -> **Personal access tokens** -> Generate a token (`ghp_...`).
-   - **For `gemini` (Free / Gemini 3.8 Flash)**: Go to [aistudio.google.com/apikey](https://aistudio.google.com/apikey) -> Click **Create API Key** (`AIzaSy...`).
+   - **For `gemini` (Default — Free / Gemini 3.8 Flash)**: Go to [aistudio.google.com/apikey](https://aistudio.google.com/apikey) -> Click **Create API Key** (`AIzaSy...`).
+   - **For `openrouter` (Free coding models)**: Go to [openrouter.ai/keys](https://openrouter.ai/keys) -> Click **Create Key** (`sk-or-v1-...`).
+   - **For `groq` (Free developer tier)**: Go to [console.groq.com/keys](https://console.groq.com/keys) -> Click **Create API Key** (`gsk_...`).
 
 2. Launch `pca` on your Windows AVD:
    ```powershell
@@ -61,7 +64,7 @@ You will see a table showing which AI endpoints are **`ALLOWED`** and which are 
    pca> /key save
    Enter API key for 'gemini' (input is hidden): ********************
    ```
-   *(Or for GitHub Models, run `/provider github-models` and then `/key save`.)*
+   *(Or for OpenRouter / Groq, run `/provider openrouter` or `/provider groq` and then `/key save`.)*
 
 ---
 

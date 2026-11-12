@@ -68,7 +68,7 @@ begin {
     # Built-in Provider Catalog (Free & Ultra-Cheap First)
     $Script:ProviderCatalog = @{
         "github-models" = @{
-            Name        = "GitHub Models (models.github.ai - FREE)"
+            Name        = "GitHub Models (RETIRED by GitHub on July 30, 2026)"
             BaseUrl     = "https://models.github.ai/inference/chat/completions"
             EnvKey      = "GITHUB_TOKEN"
             CheapModel  = "openai/gpt-4o-mini"
@@ -76,7 +76,7 @@ begin {
             InputCostPer1M  = 0.00
             CachedCostPer1M = 0.00
             OutputCostPer1M = 0.00
-            Notes       = "FREE ($0) with any GitHub PAT (models:read). Hosted on models.github.ai."
+            Notes       = "RETIRED: GitHub shut down GitHub Models API on July 30, 2026 (returns plain 'OK'). Use gemini, openrouter, or groq instead."
         }
         "gemini" = @{
             Name        = "Google Gemini AI Studio (Gemini 3.8 Flash / 3.5 Flash-Lite)"
@@ -87,7 +87,7 @@ begin {
             InputCostPer1M  = 0.00
             CachedCostPer1M = 0.00
             OutputCostPer1M = 0.00
-            Notes       = "Supports gemini-3.8-flash & gemini-3.5-flash-lite via Google AI Studio (Free Tier or $0.75/1M intro rate)."
+            Notes       = "DEFAULT: Supports gemini-3.8-flash & gemini-3.5-flash-lite via Google AI Studio (Free Tier or $0.75/1M intro rate)."
         }
         "openrouter" = @{
             Name        = "OpenRouter (Free Coding Models)"
@@ -159,7 +159,7 @@ begin {
 
     # Session State
     $Script:Session = @{
-        Provider          = "github-models"
+        Provider          = "gemini"
         Tier              = "cheap"
         Model             = ""
         ApiKey            = ""
@@ -1197,6 +1197,14 @@ Rules for Token Efficiency:
                     Provider = $Name; Host = $hostName; Status = "BLOCKED (HTML Block Page)"
                     Allowed = $false; Ready = $false; Ms = $sw.ElapsedMilliseconds; Proxy = $proxyLabel
                     Detail = "Corporate proxy returned HTML block page instead of JSON"
+                }
+            }
+            if ($ct -notmatch "json" -and -not $body.Trim().StartsWith("{")) {
+                $st = if ($hostName -match "models\.github\.ai|models\.inference\.ai\.azure\.com") { "RETIRED (Shut down Jul 2026)" } else { "BLOCKED (Non-JSON HTTP 200)" }
+                return @{
+                    Provider = $Name; Host = $hostName; Status = $st
+                    Allowed = $false; Ready = $false; Ms = $sw.ElapsedMilliseconds; Proxy = $proxyLabel
+                    Detail = "Returned non-JSON body ('$($body.Trim())')"
                 }
             }
             return @{
