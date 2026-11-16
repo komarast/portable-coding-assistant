@@ -638,10 +638,10 @@ function Get-ElementAtCursor {
     $winClass = [TiaHoverInspector.Win32Hover]::ReadClassName($rootHwnd)
     $childClass = [TiaHoverInspector.Win32Hover]::ReadClassName($hwndUnderCursor)
 
-    $pid = [uint32]0
-    [void][TiaHoverInspector.Win32Hover]::GetWindowThreadProcessId($rootHwnd, [ref]$pid)
+    $targetPid = [uint32]0
+    [void][TiaHoverInspector.Win32Hover]::GetWindowThreadProcessId($rootHwnd, [ref]$targetPid)
     $procName = ""
-    try { $procName = (Get-Process -Id $pid -ErrorAction SilentlyContinue).ProcessName } catch {}
+    try { $procName = (Get-Process -Id $targetPid -ErrorAction SilentlyContinue).ProcessName } catch {}
 
     # 1. Try Java Access Bridge on either child HWND or root HWND
     if ($jabBridge.IsInitialized) {
@@ -742,7 +742,7 @@ function Get-ElementAtCursor {
                             windowTitle    = $winTitle
                             windowClass    = $winClass
                             processName    = $procName
-                            processId      = $pid
+                            processId      = $targetPid
                             name           = $info.name
                             description    = $info.description
                             role           = $role
@@ -844,7 +844,7 @@ function Get-ElementAtCursor {
                     windowClass    = $winClass
                     childClass     = $childClass
                     processName    = $procName
-                    processId      = $pid
+                    processId      = $targetPid
                     name           = $curr.Name
                     automationId   = $curr.AutomationId
                     className      = $curr.ClassName
