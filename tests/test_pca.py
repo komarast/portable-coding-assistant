@@ -87,6 +87,22 @@ class MockLLMHandler(http.server.BaseHTTPRequestHandler):
                 '{"tool": "scaffold_xaml", "path": "Workflows/DesktopNotepad.xaml", "template": "desktop-uia", "app_exe": "notepad.exe", "window_title": "*Notepad*"}\n'
                 "```"
             )
+        elif "Run native uipath-rpa offline uip workflow" in last_user:
+            reply = (
+                "Reading bundled UIA guide without uip installed:\n"
+                "```pca-tool\n"
+                '{"tool": "read_file", "path": "{PROJECT_DIR}/.local/docs/packages/UiPath.UIAutomation.Activities/ui-automation-guide.md", "start_line": 1, "end_line": 40}\n'
+                "```"
+            )
+        elif "ui-automation-guide.md" in last_user and "Tool Result for read_file" in last_user:
+            reply = (
+                "Now running chained uip rpa commands via offline emulator:\n"
+                "```pca-tool\n"
+                '{"tool": "run_command", "command": "uip rpa init --name OfflineBot --location . --target-framework Windows --expression-language VisualBasic --output json && uip rpa activities find --query NClick --output json && uip rpa validate --file-path OfflineBot/Main.xaml --project-dir OfflineBot --output json && uip rpa build OfflineBot --output json"}\n'
+                "```"
+            )
+        elif "Tool Result for run_command" in last_user and '"Code": "Build"' in last_user:
+            reply = "Native UiPath skill workflow completed with 0 errors using built-in offline uip emulator!"
         elif "Tool Result for read_file" in last_user:
             reply = (
                 "Now patching hello.txt:\n"
@@ -271,6 +287,55 @@ class TestPortableCodingAssistant(unittest.TestCase):
             self.assertIn("<ActivityAction x:TypeArguments=\"x:Object\">", xaml_content)
             self.assertIn("FullSelectorArgument=\"&lt;wnd app='notepad.exe'", xaml_content)
 
+    def test_native_uipath_skills_and_offline_uip_cli_emulator(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            env = os.environ.copy()
+            env["PCA_FORCE_BUILTIN_UIP"] = "1"
+
+            # 1. Test direct --uip CLI mode (get-default-xaml)
+            proc_uip = subprocess.run(
+                [
+                    str(PCA_SH),
+                    "--uip", "rpa", "activities", "get-default-xaml",
+                    "--activity-class-name", "NClick", "--output", "json",
+                ],
+                cwd=tmpdir,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            uip_data = json.loads(proc_uip.stdout.strip())
+            self.assertEqual(uip_data["Result"], "Success")
+            self.assertEqual(uip_data["Code"], "GetDefaultXaml")
+            self.assertIn("<uix:NClick", uip_data["Data"]["defaultXaml"])
+
+            # 2. Test agentic loop with native uipath-rpa skill reading .local/docs/packages/... and running chained uip commands
+            url = f"http://127.0.0.1:{self.port}/v1/chat/completions"
+            proc_agent = subprocess.run(
+                [
+                    str(PCA_SH),
+                    "--provider", "gemini",
+                    "--base-url", url,
+                    "--api-key", "test-key",
+                    "--skill", "uipath-rpa",
+                    "--auto-approve",
+                    "Run native uipath-rpa offline uip workflow",
+                ],
+                cwd=tmpdir,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertIn("[Tool: read_file]", proc_agent.stdout)
+            self.assertIn("[Tool: run_command]", proc_agent.stdout)
+            self.assertIn("Native UiPath skill workflow completed with 0 errors", proc_agent.stdout)
+            self.assertTrue((tmp_path / "OfflineBot" / "project.json").is_file())
+            self.assertTrue((tmp_path / "OfflineBot" / "Main.xaml").is_file())
+            self.assertTrue((tmp_path / "OfflineBot" / ".local" / "content" / "entry-points.json").is_file())
+
     def test_pure_bash_no_python_fallback(self):
         url = f"http://127.0.0.1:{self.port}/v1/chat/completions"
         env = os.environ.copy()
@@ -299,6 +364,7 @@ class TestPortableCodingAssistant(unittest.TestCase):
             "Invoke-ToolInspectUiTree",
             "Invoke-ToolValidateXaml",
             "Invoke-ToolScaffoldXaml",
+            "Invoke-NativeUipCommand",
             "Save-EncryptedApiKey",
             "Get-EncryptedApiKey",
             "Get-SkillContent",
@@ -312,15 +378,21 @@ class TestPortableCodingAssistant(unittest.TestCase):
             "GetSystemWebProxy",
         ):
             self.assertIn(fn, content)
-        # Ensure pca.cmd exists and uses ExecutionPolicy Bypass
+        # Ensure pca.cmd and uip.cmd exist and use ExecutionPolicy Bypass
         cmd_content = PCA_CMD.read_text(encoding="utf-8")
         self.assertIn("-ExecutionPolicy Bypass", cmd_content)
-        # Ensure all 4 UiPath SKILL.md files exist and are populated
+        uip_cmd_file = REPO_ROOT / "uip.cmd"
+        self.assertTrue(uip_cmd_file.is_file())
+        self.assertIn("-Uip", uip_cmd_file.read_text(encoding="utf-8"))
+        # Ensure all native & PCA UiPath SKILL.md files exist and are populated
         for sk_dir, expected_kw in (
             ("uipath", "NApplicationCard"),
+            ("uipath-rpa", "uip rpa"),
             ("uipath-desktop", "inspect_ui_tree"),
             ("uipath-planner", "REFramework"),
             ("uipath-review", "validate_xaml"),
+            ("uipath-troubleshoot", "Troubleshooting"),
+            ("uipath-activity-migrator", "Migration"),
         ):
             sk_file = REPO_ROOT / "skills" / sk_dir / "SKILL.md"
             self.assertTrue(sk_file.is_file(), f"Missing skill file: {sk_file}")

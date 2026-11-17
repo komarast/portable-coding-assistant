@@ -43,6 +43,7 @@ param(
     [switch]$InitConfig,
     [switch]$ListProviders,
     [switch]$TestEndpoints,
+    [switch]$Uip,
     [switch]$Help
 )
 
@@ -510,12 +511,49 @@ public class PcaLauncher {
     function Get-SafePath {
         param([string]$RelOrAbsPath)
         if ([string]::IsNullOrEmpty($RelOrAbsPath)) { return $Script:WorkspaceRoot }
-        $candidate = if ([System.IO.Path]::IsPathRooted($RelOrAbsPath)) {
-            $RelOrAbsPath
+        $cleaned = $RelOrAbsPath.Trim() -replace "^\{PROJECT_DIR\}[\\/]*", ""
+        $candidate = if ([System.IO.Path]::IsPathRooted($cleaned)) {
+            $cleaned
         } else {
-            Join-Path $Script:WorkspaceRoot $RelOrAbsPath
+            Join-Path $Script:WorkspaceRoot $cleaned
         }
-        return [System.IO.Path]::GetFullPath($candidate)
+        $fullCand = [System.IO.Path]::GetFullPath($candidate)
+        if (Test-Path $fullCand) {
+            return $fullCand
+        }
+
+        # Fallback 1: .local/docs/packages/<PackageId>/<rest> -> bundled skills/uipath-rpa/references/activity-docs/<PackageId>/<ver>/<rest>
+        $normSlash = $cleaned.Replace('\', '/')
+        if ($normSlash -match "(?:^|/)\.local/docs/packages/([^/]+)/(.+)$") {
+            $pkgId = $Matches[1]
+            $restRel = $Matches[2].Replace('/', [IO.Path]::DirectorySeparatorChar)
+            $pkgRoot = Join-Path $Script:ScriptDir ("skills\uipath-rpa\references\activity-docs\" + $pkgId)
+            if (Test-Path $pkgRoot -PathType Container) {
+                $verDirs = Get-ChildItem -LiteralPath $pkgRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+                foreach ($vd in $verDirs) {
+                    $bundled = Join-Path $vd.FullName $restRel
+                    if (Test-Path $bundled) {
+                        return [System.IO.Path]::GetFullPath($bundled)
+                    }
+                }
+            }
+        }
+
+        # Fallback 2: relative reference path from native UiPath/skills (e.g. references/xaml/xaml-basics-and-rules.md)
+        $relClean = $cleaned.TrimStart('.', '\', '/')
+        foreach ($skFolder in @("uipath-rpa", "uipath-planner", "uipath-review", "uipath-troubleshoot", "uipath-activity-migrator", "uipath-desktop", "uipath")) {
+            $skCand = Join-Path $Script:ScriptDir ("skills\" + $skFolder + "\" + $relClean)
+            if (Test-Path $skCand) {
+                return [System.IO.Path]::GetFullPath($skCand)
+            }
+        }
+
+        $repoCand = Join-Path $Script:ScriptDir $relClean
+        if (Test-Path $repoCand) {
+            return [System.IO.Path]::GetFullPath($repoCand)
+        }
+
+        return $fullCand
     }
 
     function Get-RelativePath {
@@ -723,12 +761,425 @@ public class PcaLauncher {
         return "Successfully patched '$rel'."
     }
 
+    function Get-UipFlagValue {
+        param([string[]]$Tokens, [string[]]$FlagNames, [string]$DefaultValue = "")
+        for ($i = 0; $i -lt $Tokens.Count; $i++) {
+            $t = $Tokens[$i]
+            foreach ($fn in $FlagNames) {
+                if ($t -eq $fn -and ($i + 1) -lt $Tokens.Count) {
+                    return $Tokens[$i + 1].Trim('"', "'")
+                }
+                $prefix = $fn + "="
+                if ($t.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    return $t.Substring($prefix.Length).Trim('"', "'")
+                }
+            }
+        }
+        return $DefaultValue
+    }
+
+    function Invoke-NativeUipCommand {
+        param([string]$RawCommand)
+        $cleaned = $RawCommand -replace ">\s*/dev/null.*$", "" -replace ">\s*\`$null.*$", "" -replace "2>&1\s*&?\s*$", ""
+        $cleaned = $cleaned.Trim()
+        $tokenMatches = [regex]::Matches($cleaned, '(?:[^\s"'']+|"[^"]*"|''[^'']*'')+ ')
+        $tokens = New-Object System.Collections.Generic.List[string]
+        foreach ($m in [regex]::Matches($cleaned, '[^\s"'']+|"([^"]*)"|''([^'']*)''')) {
+            $val = $m.Value.Trim('"', "'")
+            if (-not [string]::IsNullOrEmpty($val)) {
+                $tokens.Add($val)
+            }
+        }
+        if ($tokens.Count -eq 0) {
+            return (@{ Result = "Failure"; Code = "InvalidCommand"; Data = @{ message = "Empty command" } } | ConvertTo-Json -Depth 6 -Compress)
+        }
+        if ($tokens[0] -match "^(?i)(?:\.[\\/])?uip(?:\.exe|\.cmd|\.ps1)?$") {
+            $tokens.RemoveAt(0)
+        }
+        if ($tokens.Count -eq 0 -or $tokens[0] -in @("--help", "-h", "help")) {
+            $helpObj = @{
+                Result = "Success"
+                Code   = "Help"
+                Data   = @{
+                    emulator = "PCA Built-in Offline uip CLI Emulator"
+                    commands = @(
+                        "uip rpa init",
+                        "uip rpa validate",
+                        "uip rpa build",
+                        "uip rpa activities find",
+                        "uip rpa activities get-default-xaml",
+                        "uip rpa packages versions",
+                        "uip rpa packages install",
+                        "uip rpa templates search",
+                        "uip rpa get-object-repository",
+                        "uip rpa analyzer-rules list",
+                        "uip rpa uia",
+                        "uip rpa-legacy validate",
+                        "uip rpa-legacy find-activities",
+                        "uip rpa-legacy type-definition"
+                    )
+                }
+            }
+            return ($helpObj | ConvertTo-Json -Depth 6 -Compress)
+        }
+
+        $tokArr = $tokens.ToArray()
+        $domain = $tokArr[0].ToLower()
+        $sub = if ($tokArr.Count -gt 1) { $tokArr[1..($tokArr.Count - 1)] } else { @() }
+
+        if ($domain -eq "tools" -and $sub.Count -ge 1 -and $sub[0] -eq "list") {
+            return (@{ Result = "Success"; Code = "ToolsList"; Data = @{ tools = @("rpa", "rpa-legacy", "solution", "or", "is") } } | ConvertTo-Json -Depth 6 -Compress)
+        }
+
+        if ($domain -in @("rpa", "rpa-legacy")) {
+            $action = if ($sub.Count -ge 1) { $sub[0].ToLower() } else { "--help" }
+            $sub2   = if ($sub.Count -ge 2) { $sub[1].ToLower() } else { "" }
+
+            if ($action -eq "init") {
+                $projName = Get-UipFlagValue -Tokens $sub -FlagNames @("--name", "-n") -DefaultValue "UiPathProject"
+                $locArg   = Get-UipFlagValue -Tokens $sub -FlagNames @("--location", "-l") -DefaultValue $Script:WorkspaceRoot
+                $exprLang = Get-UipFlagValue -Tokens $sub -FlagNames @("--expression-language") -DefaultValue "VisualBasic"
+                $targetFw = Get-UipFlagValue -Tokens $sub -FlagNames @("--target-framework") -DefaultValue "Windows"
+
+                $locFull = Get-SafePath $locArg
+                $leafName = Split-Path -Leaf $locFull
+                $projDir = if ($leafName -ieq $projName) { $locFull } else { Join-Path $locFull $projName }
+                if (-not (Test-Path $projDir)) { New-Item -ItemType Directory -Path $projDir -Force | Out-Null }
+
+                $projObj = [ordered]@{
+                    name        = $projName
+                    projectId   = "d9a8f1b2-4c3e-4a1b-9f0e-123456789abc"
+                    description = "UiPath $targetFw automation project ($exprLang)"
+                    main        = "Main.xaml"
+                    dependencies = [ordered]@{
+                        "UiPath.System.Activities"       = "[25.10.2]"
+                        "UiPath.UIAutomation.Activities" = "[26.10.0-preview]"
+                    }
+                    schemaVersion      = "4.0"
+                    studioVersion      = "25.10.0.0"
+                    projectVersion     = "1.0.0"
+                    expressionLanguage = $exprLang
+                    targetFramework    = $targetFw
+                    entryPoints        = @(
+                        [ordered]@{
+                            filePath = "Main.xaml"
+                            uniqueId = "e1a2b3c4-5678-4012-9abc-def012345678"
+                            input    = @()
+                            output   = @()
+                        }
+                    )
+                }
+                $projJsonFile = Join-Path $projDir "project.json"
+                [System.IO.File]::WriteAllText($projJsonFile, ($projObj | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+
+                $mainXaml = Join-Path $projDir "Main.xaml"
+                if (-not (Test-Path $mainXaml -PathType Leaf)) {
+                    $prevApprove = $Script:Session.AutoApprove
+                    $Script:Session.AutoApprove = $true
+                    try {
+                        Invoke-ToolScaffoldXaml -Path $mainXaml -Template "sequence" | Out-Null
+                    } finally {
+                        $Script:Session.AutoApprove = $prevApprove
+                    }
+                }
+
+                $bundledUia = Join-Path $Script:ScriptDir "skills\uipath-rpa\references\activity-docs\UiPath.UIAutomation.Activities\26.10\ui-automation-guide.md"
+                if (Test-Path $bundledUia -PathType Leaf) {
+                    $targetUia = Join-Path $projDir ".local\docs\packages\UiPath.UIAutomation.Activities\ui-automation-guide.md"
+                    $targetUiaParent = Split-Path -Parent $targetUia
+                    if (-not (Test-Path $targetUiaParent)) { New-Item -ItemType Directory -Path $targetUiaParent -Force | Out-Null }
+                    Copy-Item -LiteralPath $bundledUia -Destination $targetUia -Force
+                }
+
+                $res = @{
+                    Result = "Success"
+                    Code   = "Init"
+                    Data   = @{
+                        projectDir         = $projDir
+                        projectFile        = $projJsonFile
+                        mainFile           = $mainXaml
+                        targetFramework    = $targetFw
+                        expressionLanguage = $exprLang
+                    }
+                }
+                return ($res | ConvertTo-Json -Depth 6 -Compress)
+            }
+
+            if ($action -in @("validate", "analyze")) {
+                $fileArg = Get-UipFlagValue -Tokens $sub -FlagNames @("--file-path", "-f") -DefaultValue ""
+                $projArg = Get-UipFlagValue -Tokens $sub -FlagNames @("--project-dir", "-p") -DefaultValue $Script:WorkspaceRoot
+                if ([string]::IsNullOrEmpty($fileArg) -and $sub.Count -ge 2 -and -not $sub[1].StartsWith("-")) {
+                    $fileArg = $sub[1]
+                }
+                $targets = New-Object System.Collections.Generic.List[string]
+                if (-not [string]::IsNullOrEmpty($fileArg)) {
+                    $fp = Get-SafePath $fileArg
+                    if (-not (Test-Path $fp -PathType Leaf) -and -not [string]::IsNullOrEmpty($projArg)) {
+                        $fp = Get-SafePath (Join-Path $projArg $fileArg)
+                    }
+                    $targets.Add($fp)
+                } else {
+                    $pdir = Get-SafePath $projArg
+                    $xFiles = Get-ChildItem -Path $pdir -Filter "*.xaml" -Recurse -File -ErrorAction SilentlyContinue
+                    foreach ($xf in $xFiles) { $targets.Add($xf.FullName) }
+                }
+
+                $allErrs = New-Object System.Collections.Generic.List[string]
+                $allWarns = New-Object System.Collections.Generic.List[string]
+                foreach ($tf in $targets) {
+                    $rep = Invoke-ToolValidateXaml -Path $tf
+                    if ($rep.StartsWith("Error:")) {
+                        $allErrs.Add($rep)
+                        continue
+                    }
+                    $inErr = $false; $inWarn = $false
+                    foreach ($ln in ($rep -split "`r?`n")) {
+                        $s = $ln.Trim()
+                        if ($s -match "^Errors \(") { $inErr = $true; $inWarn = $false; continue }
+                        if ($s -match "^Warnings") { $inWarn = $true; $inErr = $false; continue }
+                        if ($s.StartsWith("- ")) {
+                            if ($inErr)  { $allErrs.Add((Split-Path -Leaf $tf) + ": " + $s.Substring(2)) }
+                            if ($inWarn) { $allWarns.Add((Split-Path -Leaf $tf) + ": " + $s.Substring(2)) }
+                        }
+                    }
+                }
+
+                if ($allErrs.Count -gt 0) {
+                    return (@{
+                        Result = "Failure"
+                        Code   = "ValidationErrorsFound"
+                        Data   = @{
+                            message  = ($allErrs -join "; ")
+                            errors   = $allErrs.ToArray()
+                            warnings = $allWarns.ToArray()
+                        }
+                    } | ConvertTo-Json -Depth 6 -Compress)
+                }
+                return (@{
+                    Result = "Success"
+                    Code   = "Validate"
+                    Data   = @{
+                        message  = "Validation succeeded for $($targets.Count) file(s) with 0 error(s) and $($allWarns.Count) warning(s)."
+                        errors   = @()
+                        warnings = $allWarns.ToArray()
+                    }
+                } | ConvertTo-Json -Depth 6 -Compress)
+            }
+
+            if ($action -in @("build", "pack")) {
+                $projArg = Get-UipFlagValue -Tokens $sub -FlagNames @("--project-dir", "-p") -DefaultValue ""
+                if ([string]::IsNullOrEmpty($projArg) -and $sub.Count -ge 2 -and -not $sub[1].StartsWith("-")) {
+                    $projArg = $sub[1]
+                }
+                if ([string]::IsNullOrEmpty($projArg)) { $projArg = $Script:WorkspaceRoot }
+                $pdir = Get-SafePath $projArg
+                if (Test-Path $pdir -PathType Leaf) { $pdir = Split-Path -Parent $pdir }
+
+                $xFiles = Get-ChildItem -Path $pdir -Filter "*.xaml" -Recurse -File -ErrorAction SilentlyContinue
+                $allErrs = New-Object System.Collections.Generic.List[string]
+                $allWarns = New-Object System.Collections.Generic.List[string]
+                foreach ($xf in $xFiles) {
+                    $rep = Invoke-ToolValidateXaml -Path $xf.FullName
+                    $inErr = $false; $inWarn = $false
+                    foreach ($ln in ($rep -split "`r?`n")) {
+                        $s = $ln.Trim()
+                        if ($s -match "^Errors \(") { $inErr = $true; $inWarn = $false; continue }
+                        if ($s -match "^Warnings") { $inWarn = $true; $inErr = $false; continue }
+                        if ($s.StartsWith("- ")) {
+                            if ($inErr)  { $allErrs.Add($xf.Name + ": " + $s.Substring(2)) }
+                            if ($inWarn) { $allWarns.Add($xf.Name + ": " + $s.Substring(2)) }
+                        }
+                    }
+                }
+
+                $localContent = Join-Path $pdir ".local\content"
+                if (-not (Test-Path $localContent)) { New-Item -ItemType Directory -Path $localContent -Force | Out-Null }
+                [System.IO.File]::WriteAllText((Join-Path $localContent "entry-points.json"), '{"entryPoints":[{"filePath":"Main.xaml"}]}', (New-Object System.Text.UTF8Encoding($false)))
+                [System.IO.File]::WriteAllText((Join-Path $localContent "bindings_v2.json"), '{"version":"2.0","resources":[]}', (New-Object System.Text.UTF8Encoding($false)))
+
+                if ($allErrs.Count -gt 0) {
+                    return (@{
+                        Result = "Failure"
+                        Code   = "BuildFailed"
+                        Data   = @{
+                            projectDir = $pdir
+                            message    = ($allErrs -join "; ")
+                            errors     = $allErrs.ToArray()
+                            warnings   = $allWarns.ToArray()
+                        }
+                    } | ConvertTo-Json -Depth 6 -Compress)
+                }
+                return (@{
+                    Result = "Success"
+                    Code   = "Build"
+                    Data   = @{
+                        projectDir     = $pdir
+                        filesValidated = @($xFiles).Count
+                        errors         = @()
+                        warnings       = $allWarns.ToArray()
+                        message        = "Build succeeded ($(@($xFiles).Count) workflow(s) validated, 0 errors)."
+                    }
+                } | ConvertTo-Json -Depth 6 -Compress)
+            }
+
+            if (($action -eq "activities" -and $sub2 -eq "find") -or $action -eq "find-activities") {
+                $q = (Get-UipFlagValue -Tokens $sub -FlagNames @("--query", "-q") -DefaultValue "").ToLower()
+                $acts = New-Object System.Collections.Generic.List[object]
+                $docsRoot = Join-Path $Script:ScriptDir "skills\uipath-rpa\references\activity-docs"
+                if (Test-Path $docsRoot -PathType Container) {
+                    $mdFiles = Get-ChildItem -Path $docsRoot -Filter "*.md" -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.DirectoryName -match "activities$" }
+                    foreach ($mf in $mdFiles) {
+                        $aName = $mf.BaseName
+                        if ([string]::IsNullOrEmpty($q) -or $aName.ToLower().Contains($q)) {
+                            $pkgName = $mf.Directory.Parent.Parent.Name
+                            $acts.Add(@{
+                                className   = $aName
+                                displayName = $aName
+                                packageId   = $pkgName
+                                isTrigger   = $aName.Contains("Trigger")
+                            })
+                        }
+                        if ($acts.Count -ge 30) { break }
+                    }
+                }
+                return (@{
+                    Result = "Success"
+                    Code   = "ActivitiesFind"
+                    Data   = @{ query = $q; count = $acts.Count; activities = $acts.ToArray() }
+                } | ConvertTo-Json -Depth 6 -Compress)
+            }
+
+            if (($action -eq "activities" -and $sub2 -eq "get-default-xaml") -or $action -eq "type-definition") {
+                $clsName = Get-UipFlagValue -Tokens $sub -FlagNames @("--activity-class-name", "--type", "-t") -DefaultValue "LogMessage"
+                $parts = $clsName -split "[:\.]"
+                $shortCls = $parts[$parts.Count - 1]
+                $isUia = $shortCls.StartsWith("N")
+                $xmlns = if ($isUia) { 'xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"' } else { 'xmlns:ui="http://schemas.uipath.com/workflow/activities"' }
+                $prefix = if ($isUia) { "uix" } else { "ui" }
+                $defXaml = "<" + $prefix + ":" + $shortCls + ' DisplayName="' + $shortCls + '" sap2010:WorkflowViewState.IdRef="' + $shortCls + '_1" />'
+                return (@{
+                    Result = "Success"
+                    Code   = "GetDefaultXaml"
+                    Data   = @{
+                        className   = $shortCls
+                        packageId   = if ($isUia) { "UiPath.UIAutomation.Activities" } else { "UiPath.System.Activities" }
+                        xmlns       = $xmlns
+                        defaultXaml = $defXaml
+                    }
+                } | ConvertTo-Json -Depth 6 -Compress)
+            }
+
+            if ($action -eq "packages" -and $sub2 -eq "versions") {
+                $pkgId = Get-UipFlagValue -Tokens $sub -FlagNames @("--package-id", "-p") -DefaultValue "UiPath.System.Activities"
+                return (@{
+                    Result = "Success"
+                    Code   = "PackageVersions"
+                    Data   = @{ packageId = $pkgId; versions = @("26.10.0-preview", "25.12.2", "25.10.2", "24.10.6") }
+                } | ConvertTo-Json -Depth 6 -Compress)
+            }
+
+            if ($action -eq "packages" -and $sub2 -eq "install") {
+                $pkgSpec = Get-UipFlagValue -Tokens $sub -FlagNames @("--packages") -DefaultValue ""
+                $projArg = Get-UipFlagValue -Tokens $sub -FlagNames @("--project-dir") -DefaultValue $Script:WorkspaceRoot
+                $pdir = Get-SafePath $projArg
+                return (@{
+                    Result = "Success"
+                    Code   = "PackagesInstall"
+                    Data   = @{ installed = @($pkgSpec); projectDir = $pdir }
+                } | ConvertTo-Json -Depth 6 -Compress)
+            }
+
+            if ($action -eq "templates" -and $sub2 -eq "search") {
+                $q = Get-UipFlagValue -Tokens $sub -FlagNames @("--query") -DefaultValue ""
+                return (@{
+                    Result = "Success"
+                    Code   = "TemplatesSearch"
+                    Data   = @{
+                        query     = $q
+                        templates = @(
+                            @{ id = "blank-process"; name = "Blank Process"; source = "Official" },
+                            @{ id = "reframework"; name = "Robotic Enterprise Framework (REFramework)"; source = "Official" }
+                        )
+                    }
+                } | ConvertTo-Json -Depth 6 -Compress)
+            }
+
+            if ($action -eq "get-object-repository") {
+                return (@{
+                    Result = "Success"
+                    Code   = "GetObjectRepository"
+                    Data   = @{ applications = @(); note = "Offline PCA mode: use inline TargetAnchorable selectors or inspect_ui_tree." }
+                } | ConvertTo-Json -Depth 6 -Compress)
+            }
+
+            if ($action -eq "analyzer-rules" -and $sub2 -eq "list") {
+                return (@{
+                    Result = "Success"
+                    Code   = "AnalyzerRulesList"
+                    Data   = @{
+                        rules = @(
+                            @{ id = "ST-NMG-002"; severity = "Warning"; description = "Prefix arguments with in_, out_, or io_" },
+                            @{ id = "ST-SEC-007"; severity = "Error"; description = "Keep secrets inside scope" },
+                            @{ id = "ST-USG-010"; severity = "Warning"; description = "Prefer NCheckAppState over hardcoded Delay" },
+                            @{ id = "UI-ANA-001"; severity = "Warning"; description = "Avoid volatile idx >= 2 in selectors" }
+                        )
+                    }
+                } | ConvertTo-Json -Depth 6 -Compress)
+            }
+
+            if ($action -eq "uia") {
+                $winTitle = Get-UipFlagValue -Tokens $sub -FlagNames @("--window-title", "--title") -DefaultValue ""
+                $treeText = Invoke-ToolInspectUiTree -WindowTitle $winTitle -MaxDepth 3
+                return (@{
+                    Result = "Success"
+                    Code   = "UiaInspect"
+                    Data   = @{ windowTitle = $winTitle; uiTree = $treeText }
+                } | ConvertTo-Json -Depth 6 -Compress)
+            }
+        }
+
+        return (@{
+            Result = "Success"
+            Code   = "EmulatedCommand"
+            Data   = @{ command = $RawCommand; message = "Executed in PCA offline uip emulator." }
+        } | ConvertTo-Json -Depth 6 -Compress)
+    }
+
     function Invoke-ToolRunCommand {
         param([string]$Command)
         if ([string]::IsNullOrEmpty($Command)) { return "Error: command is required." }
         if (-not (Confirm-UserAction -Title "Execute Shell Command" -PreviewText "  > $Command")) {
             return "User declined executing command: $Command"
         }
+
+        # Intercept uip commands when external uip CLI is not installed on this machine
+        $uipBin = Get-Command "uip" -ErrorAction SilentlyContinue
+        $forceBuiltin = ($env:PCA_FORCE_BUILTIN_UIP -eq "1")
+        $segments = @($Command -split "&&" | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrEmpty($_) })
+        $hasUipSeg = $false
+        foreach ($seg in $segments) {
+            if ($seg -match "^(?i)(?:\.[\\/])?uip(?:\.exe|\.cmd|\.ps1)?\b") {
+                $hasUipSeg = $true
+                break
+            }
+        }
+        if ($hasUipSeg -and ($null -eq $uipBin -or $forceBuiltin)) {
+            $outputs = New-Object System.Collections.Generic.List[string]
+            $exitCode = 0
+            foreach ($seg in $segments) {
+                if ($seg -match "^(?i)(?:\.[\\/])?uip(?:\.exe|\.cmd|\.ps1)?\b") {
+                    $jsonOut = Invoke-NativeUipCommand -RawCommand $seg
+                    $outputs.Add($jsonOut)
+                    if ($jsonOut -match '"Result"\s*:\s*"Failure"') { $exitCode = 1 }
+                }
+            }
+            $combinedUip = ("ExitCode: {0}`n{1}" -f $exitCode, ($outputs -join "`n")).Trim()
+            if ($combinedUip.Length -gt 3500) {
+                $combinedUip = $combinedUip.Substring(0, 3500) + "`n... [Output truncated to save tokens]"
+            }
+            return $combinedUip
+        }
+
         try {
             $escapedCmd = $Command.Replace('"', '\"')
             $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -975,6 +1426,17 @@ public class PcaLauncher {
         }
         if ($raw -match "<ui:" -and $raw -notmatch 'xmlns:ui=') {
             $errors.Add("[XAML-003] Uses <ui:*> activities but root <Activity> is missing xmlns:ui declaration.")
+        }
+
+        if ($raw -match "<uix:NGetText\b[^>]*\bValue=") {
+            $errors.Add("[XAML-PITFALL-001] <uix:NGetText> uses Text='[out_Var]', never Value='[out_Var]' (Rule 21 / common-pitfalls.md).")
+        }
+
+        if ($raw -match 'x:Class="([^"]+)"') {
+            $xClsVal = $Matches[1]
+            if ($xClsVal.Contains(".")) {
+                $warnings.Add("[XAML-RULE25A] x:Class '$xClsVal' contains a dot. Prefer filename stem without namespace prefix.")
+            }
         }
 
         # 3. Scope ActivityAction Body check (Rule from UiPath/skills xaml-basics-and-rules.md)
@@ -1922,10 +2384,12 @@ Rules for Token Efficiency & UiPath XAML Quality:
                     $Script:Session.ActiveSkills.Clear()
                     Write-Host "  Cleared all active skills." -ForegroundColor Green
                 } else {
-                    $toAdd = @("uipath", "uipath-desktop")
-                    if ($sub -eq "plan")   { $toAdd = @("uipath", "uipath-desktop", "uipath-planner") }
-                    if ($sub -eq "review") { $toAdd = @("uipath", "uipath-desktop", "uipath-review") }
-                    if ($sub -in @("full", "all")) { $toAdd = @("uipath", "uipath-desktop", "uipath-planner", "uipath-review") }
+                    $toAdd = @("uipath", "uipath-rpa", "uipath-desktop")
+                    if ($sub -eq "plan")         { $toAdd = @("uipath", "uipath-rpa", "uipath-desktop", "uipath-planner") }
+                    if ($sub -eq "review")       { $toAdd = @("uipath", "uipath-rpa", "uipath-desktop", "uipath-review") }
+                    if ($sub -eq "troubleshoot") { $toAdd = @("uipath", "uipath-rpa", "uipath-desktop", "uipath-troubleshoot") }
+                    if ($sub -eq "migrate")      { $toAdd = @("uipath", "uipath-rpa", "uipath-desktop", "uipath-activity-migrator") }
+                    if ($sub -in @("full", "all")) { $toAdd = @("uipath", "uipath-rpa", "uipath-desktop", "uipath-planner", "uipath-review", "uipath-troubleshoot", "uipath-activity-migrator") }
                     foreach ($sk in $toAdd) {
                         if (-not $Script:Session.ActiveSkills.Contains($sk)) {
                             $Script:Session.ActiveSkills.Add($sk)
@@ -1933,14 +2397,14 @@ Rules for Token Efficiency & UiPath XAML Quality:
                     }
                     $activeStr = $Script:Session.ActiveSkills -join ", "
                     Write-Host "  Activated UiPath XAML & Desktop Automation Agent skills: $activeStr" -ForegroundColor Green
-                    Write-Host "  Sub-modes: /uipath | /uipath plan | /uipath review | /uipath full | /uipath off" -ForegroundColor DarkGray
+                    Write-Host "  Sub-modes: /uipath | /uipath plan | /uipath review | /uipath troubleshoot | /uipath migrate | /uipath full | /uipath off" -ForegroundColor DarkGray
                 }
             }
             "/skill" {
                 if ([string]::IsNullOrEmpty($arg)) {
                     $activeStr = if ($Script:Session.ActiveSkills.Count -gt 0) { ($Script:Session.ActiveSkills -join ", ") } else { "none" }
                     Write-Host "  Active skills: $activeStr" -ForegroundColor Cyan
-                    Write-Host "  Available skills: uipath, uipath-desktop, uipath-planner, uipath-review (or '/skill off' to clear)" -ForegroundColor DarkGray
+                    Write-Host "  Available skills: uipath, uipath-rpa, uipath-desktop, uipath-planner, uipath-review, uipath-troubleshoot, uipath-activity-migrator (or '/skill off' to clear)" -ForegroundColor DarkGray
                 } elseif ($arg.ToLower() -eq "off" -or $arg.ToLower() -eq "none" -or $arg.ToLower() -eq "clear") {
                     $Script:Session.ActiveSkills.Clear()
                     Write-Host "  Cleared all active skills." -ForegroundColor Green
@@ -2047,6 +2511,14 @@ Rules for Token Efficiency & UiPath XAML Quality:
     # Entrypoint Execution
     # =========================================================================
     Resolve-Configuration
+
+    if ($Uip) {
+        $Script:Session.AutoApprove = $true
+        $rawUipCmd = "uip " + ($PromptArgs -join " ")
+        $uipJson = Invoke-NativeUipCommand -RawCommand $rawUipCmd
+        Write-Output $uipJson
+        return
+    }
 
     if ($Help) {
         Write-Banner

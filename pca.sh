@@ -15,6 +15,8 @@ if command -v python3 >/dev/null 2>&1 && [ "${PCA_FORCE_BASH:-0}" != "1" ]; then
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -359,11 +361,550 @@ def tool_edit_file(path: str, search: str = "", replace: str = "") -> str:
     return f"Successfully patched '{rpath}'."
 
 
+DEFAULT_XAML_SNIPPETS = {
+    "NApplicationCard": {
+        "packageId": "UiPath.UIAutomation.Activities",
+        "xmlns": 'xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"',
+        "defaultXaml": (
+            '<uix:NApplicationCard AttachMode="ByInstance" DisplayName="Use Application/Browser" '
+            'InteractionMode="Simulate" OpenMode="IfNotOpen" ScopeGuid="d9a8f1b2-4c3e-4a1b-9f0e-123456789abc" Version="V2">\n'
+            '  <uix:NApplicationCard.Body>\n'
+            '    <ActivityAction x:TypeArguments="x:Object">\n'
+            '      <ActivityAction.Argument>\n'
+            '        <DelegateInArgument x:TypeArguments="x:Object" Name="WSSessionData" />\n'
+            '      </ActivityAction.Argument>\n'
+            '      <Sequence DisplayName="Do" />\n'
+            '    </ActivityAction>\n'
+            '  </uix:NApplicationCard.Body>\n'
+            '  <uix:NApplicationCard.TargetApp>\n'
+            '    <uix:TargetApp FilePath="notepad.exe" Selector="&lt;wnd app=\'notepad.exe\' title=\'*Notepad*\' /&gt;" />\n'
+            '  </uix:NApplicationCard.TargetApp>\n'
+            '</uix:NApplicationCard>'
+        ),
+    },
+    "NClick": {
+        "packageId": "UiPath.UIAutomation.Activities",
+        "xmlns": 'xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"',
+        "defaultXaml": (
+            '<uix:NClick ActivateBefore="True" ClickType="Single" DisplayName="Click Target" '
+            'InteractionMode="Simulate" KeyModifiers="None" MouseButton="Left" Version="V3">\n'
+            '  <uix:NClick.Target>\n'
+            '    <uix:TargetAnchorable FullSelectorArgument="&lt;uia role=\'button\' name=\'OK\' /&gt;" SearchSteps="Selector" Version="V2" Visibility="Interactive" />\n'
+            '  </uix:NClick.Target>\n'
+            '</uix:NClick>'
+        ),
+    },
+    "NTypeInto": {
+        "packageId": "UiPath.UIAutomation.Activities",
+        "xmlns": 'xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"',
+        "defaultXaml": (
+            '<uix:NTypeInto ActivateBefore="True" ClickBeforeMode="Single" DisplayName="Type Into Target" '
+            'EmptyFieldMode="SingleLine" InteractionMode="Simulate" Text="[in_Text]" Version="V3">\n'
+            '  <uix:NTypeInto.Target>\n'
+            '    <uix:TargetAnchorable FullSelectorArgument="&lt;uia role=\'edit\' /&gt;" SearchSteps="Selector" Version="V2" Visibility="Interactive" />\n'
+            '  </uix:NTypeInto.Target>\n'
+            '</uix:NTypeInto>'
+        ),
+    },
+    "NGetText": {
+        "packageId": "UiPath.UIAutomation.Activities",
+        "xmlns": 'xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"',
+        "defaultXaml": (
+            '<uix:NGetText DisplayName="Get Text" Text="[out_Text]" Version="V3">\n'
+            '  <uix:NGetText.Target>\n'
+            '    <uix:TargetAnchorable FullSelectorArgument="&lt;uia role=\'text\' /&gt;" SearchSteps="Selector" Version="V2" Visibility="Interactive" />\n'
+            '  </uix:NGetText.Target>\n'
+            '</uix:NGetText>'
+        ),
+    },
+    "NCheckAppState": {
+        "packageId": "UiPath.UIAutomation.Activities",
+        "xmlns": 'xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"',
+        "defaultXaml": (
+            '<uix:NCheckAppState DisplayName="Check App State" Result="[bool_Appeared]" Timeout="5" Version="V3">\n'
+            '  <uix:NCheckAppState.Target>\n'
+            '    <uix:TargetAnchorable FullSelectorArgument="&lt;uia role=\'dialog\' /&gt;" SearchSteps="Selector" Version="V2" Visibility="Interactive" />\n'
+            '  </uix:NCheckAppState.Target>\n'
+            '  <uix:NCheckAppState.IfExists>\n'
+            '    <Sequence DisplayName="Target Appears" />\n'
+            '  </uix:NCheckAppState.IfExists>\n'
+            '  <uix:NCheckAppState.IfNotExists>\n'
+            '    <Sequence DisplayName="Target Does Not Appear" />\n'
+            '  </uix:NCheckAppState.IfNotExists>\n'
+            '</uix:NCheckAppState>'
+        ),
+    },
+    "LogMessage": {
+        "packageId": "UiPath.System.Activities",
+        "xmlns": 'xmlns:ui="http://schemas.uipath.com/workflow/activities"',
+        "defaultXaml": '<ui:LogMessage DisplayName="Log Message" Level="Info" Message="[&quot;Status message&quot;]" />',
+    },
+    "InvokeWorkflowFile": {
+        "packageId": "UiPath.System.Activities",
+        "xmlns": 'xmlns:ui="http://schemas.uipath.com/workflow/activities"',
+        "defaultXaml": (
+            '<ui:InvokeWorkflowFile ArgumentsVariable="{x:Null}" ContinueOnError="{x:Null}" '
+            'DisplayName="Invoke SubWorkflow" UnSafe="False" WorkflowFileName="SubWorkflow.xaml">\n'
+            '  <ui:InvokeWorkflowFile.Arguments>\n'
+            '    <scg:Dictionary x:TypeArguments="x:String, Argument" />\n'
+            '  </ui:InvokeWorkflowFile.Arguments>\n'
+            '</ui:InvokeWorkflowFile>'
+        ),
+    },
+    "MultipleAssign": {
+        "packageId": "UiPath.System.Activities",
+        "xmlns": 'xmlns:ui="http://schemas.uipath.com/workflow/activities"',
+        "defaultXaml": (
+            '<ui:MultipleAssign DisplayName="Multiple Assign">\n'
+            '  <ui:MultipleAssign.AssignOperations>\n'
+            '    <scg:List x:TypeArguments="ui:AssignOperation" Capacity="4">\n'
+            '      <ui:AssignOperation Value="[&quot;val&quot;]">\n'
+            '        <ui:AssignOperation.To>\n'
+            '          <OutArgument x:TypeArguments="x:String">[str_Var]</OutArgument>\n'
+            '        </ui:AssignOperation.To>\n'
+            '      </ui:AssignOperation>\n'
+            '    </scg:List>\n'
+            '  </ui:MultipleAssign.AssignOperations>\n'
+            '</ui:MultipleAssign>'
+        ),
+    },
+}
+
+
+def _parse_flag(tokens: list, *flags, default: str = "") -> str:
+    for idx, tok in enumerate(tokens):
+        if tok in flags and idx + 1 < len(tokens):
+            return tokens[idx + 1]
+        for fl in flags:
+            if tok.startswith(fl + "="):
+                return tok.split("=", 1)[1]
+    return default
+
+
+def native_uip_command(raw_cmd: str) -> str:
+    import shlex
+    cleaned = re.sub(r">\s*/dev/null.*$", "", raw_cmd).strip()
+    cleaned = re.sub(r"2>&1\s*&?\s*$", "", cleaned).strip()
+    try:
+        tokens = shlex.split(cleaned)
+    except ValueError:
+        tokens = cleaned.split()
+    if not tokens:
+        return json.dumps({"Result": "Failure", "Code": "InvalidCommand", "Data": {"message": "Empty command"}})
+    if tokens[0] in ("uip", "uip.exe", "uip.cmd", "./uip.cmd"):
+        tokens = tokens[1:]
+
+    if not tokens or tokens[0] in ("--help", "-h", "help"):
+        return json.dumps({
+            "Result": "Success",
+            "Code": "Help",
+            "Data": {
+                "emulator": "PCA Built-in Offline uip CLI Emulator",
+                "commands": [
+                    "uip rpa init",
+                    "uip rpa validate",
+                    "uip rpa build",
+                    "uip rpa activities find",
+                    "uip rpa activities get-default-xaml",
+                    "uip rpa packages versions",
+                    "uip rpa packages install",
+                    "uip rpa templates search",
+                    "uip rpa get-object-repository",
+                    "uip rpa analyzer-rules list",
+                    "uip rpa uia",
+                    "uip rpa-legacy validate",
+                    "uip rpa-legacy find-activities",
+                    "uip rpa-legacy type-definition",
+                ],
+            },
+        })
+
+    if tokens[:2] == ["tools", "list"]:
+        return json.dumps({
+            "Result": "Success",
+            "Code": "ToolsList",
+            "Data": {"tools": ["rpa", "rpa-legacy", "solution", "or", "is"]},
+        })
+
+    domain = tokens[0]
+    sub = tokens[1:] if len(tokens) > 1 else []
+
+    if domain in ("rpa", "rpa-legacy"):
+        action = sub[0] if sub else "--help"
+        sub_2 = sub[1] if len(sub) > 1 else ""
+
+        if action == "init":
+            name = _parse_flag(sub, "--name", "-n", default="UiPathProject")
+            loc = _parse_flag(sub, "--location", "-l", default=str(WORKSPACE))
+            expr_lang = _parse_flag(sub, "--expression-language", default="VisualBasic")
+            target_fw = _parse_flag(sub, "--target-framework", default="Windows")
+            loc_path = safe_path(loc)
+            proj_dir = loc_path if loc_path.name.lower() == name.lower() else (loc_path / name)
+            proj_dir.mkdir(parents=True, exist_ok=True)
+            proj_json = {
+                "name": name,
+                "projectId": "d9a8f1b2-4c3e-4a1b-9f0e-123456789abc",
+                "description": f"UiPath {target_fw} automation project ({expr_lang})",
+                "main": "Main.xaml",
+                "dependencies": {
+                    "UiPath.System.Activities": "[25.10.2]",
+                    "UiPath.UIAutomation.Activities": "[26.10.0-preview]",
+                },
+                "webServices": [],
+                "entitiesStores": [],
+                "schemaVersion": "4.0",
+                "studioVersion": "25.10.0.0",
+                "projectVersion": "1.0.0",
+                "runtimeOptions": {
+                    "autoDispose": False,
+                    "netFrameworkLazyLoading": False,
+                    "isPausable": True,
+                    "isAttended": False,
+                    "requiresUserInteraction": True,
+                    "supportsPersistence": False,
+                    "workflowSerialization": "NewtonsoftJson",
+                    "excludedLoggedData": ["Private:*", "*password*"],
+                    "executionType": "Workflow",
+                    "readyForPiP": False,
+                    "startsInPiP": False,
+                    "mustRestoreAllDependencies": True,
+                    "pipType": "ChildSession",
+                },
+                "designOptions": {
+                    "projectProfile": "Developement",
+                    "outputType": "Process",
+                    "libraryOptions": {"includeOriginalXaml": False, "privateWorkflows": []},
+                    "processOptions": {"ignoredFiles": []},
+                    "fileInfoCollection": [],
+                    "saveToCloud": False,
+                },
+                "expressionLanguage": expr_lang,
+                "entryPoints": [
+                    {
+                        "filePath": "Main.xaml",
+                        "uniqueId": "e1a2b3c4-5678-4012-9abc-def012345678",
+                        "input": [],
+                        "output": [],
+                    }
+                ],
+                "isTemplate": False,
+                "templateProjectData": {},
+                "publishData": {},
+                "targetFramework": target_fw,
+            }
+            (proj_dir / "project.json").write_text(json.dumps(proj_json, indent=2), encoding="utf-8")
+            main_xaml = proj_dir / "Main.xaml"
+            if not main_xaml.exists():
+                tool_scaffold_xaml(str(main_xaml), template="sequence")
+            # Seed .local/docs/packages/UiPath.UIAutomation.Activities/ui-automation-guide.md
+            bundled_uia = SCRIPT_DIR / "skills" / "uipath-rpa" / "references" / "activity-docs" / "UiPath.UIAutomation.Activities" / "26.10" / "ui-automation-guide.md"
+            if bundled_uia.is_file():
+                target_uia = proj_dir / ".local" / "docs" / "packages" / "UiPath.UIAutomation.Activities" / "ui-automation-guide.md"
+                target_uia.parent.mkdir(parents=True, exist_ok=True)
+                target_uia.write_text(bundled_uia.read_text(encoding="utf-8"), encoding="utf-8")
+            return json.dumps({
+                "Result": "Success",
+                "Code": "Init",
+                "Data": {
+                    "projectDir": str(proj_dir),
+                    "projectFile": str(proj_dir / "project.json"),
+                    "mainFile": str(main_xaml),
+                    "targetFramework": target_fw,
+                    "expressionLanguage": expr_lang,
+                },
+            })
+
+        if action in ("validate", "analyze"):
+            file_arg = _parse_flag(sub, "--file-path", "-f")
+            proj_arg = _parse_flag(sub, "--project-dir", "-p", default=str(WORKSPACE))
+            if not file_arg and len(sub) > 1 and not sub[1].startswith("-"):
+                file_arg = sub[1]
+            targets = []
+            if file_arg:
+                fp = safe_path(file_arg)
+                if not fp.is_file() and proj_arg:
+                    fp = safe_path(str(Path(proj_arg) / file_arg))
+                targets.append(fp)
+            else:
+                pdir = safe_path(proj_arg)
+                targets.extend(sorted(pdir.rglob("*.xaml")))
+
+            all_errors = []
+            all_warnings = []
+            for tf in targets:
+                rep = tool_validate_xaml(str(tf))
+                for line in rep.splitlines():
+                    s = line.strip()
+                    if s.startswith("ERROR:"):
+                        all_errors.append(f"{tf.name}: {s[6:].strip()}")
+                    elif s.startswith("WARN:"):
+                        all_warnings.append(f"{tf.name}: {s[5:].strip()}")
+                if rep.startswith("Error:"):
+                    all_errors.append(rep)
+
+            if all_errors:
+                return json.dumps({
+                    "Result": "Failure",
+                    "Code": "ValidationErrorsFound",
+                    "Data": {
+                        "message": "; ".join(all_errors),
+                        "errors": all_errors,
+                        "warnings": all_warnings,
+                    },
+                })
+            return json.dumps({
+                "Result": "Success",
+                "Code": "Validate",
+                "Data": {
+                    "message": f"Validation succeeded for {len(targets)} file(s) with 0 error(s) and {len(all_warnings)} warning(s).",
+                    "errors": [],
+                    "warnings": all_warnings,
+                },
+            })
+
+        if action in ("build", "pack"):
+            proj_arg = _parse_flag(sub, "--project-dir", "-p")
+            if not proj_arg and len(sub) > 1 and not sub[1].startswith("-"):
+                proj_arg = sub[1]
+            pdir = safe_path(proj_arg or str(WORKSPACE))
+            if pdir.is_file():
+                pdir = pdir.parent
+            xamls = sorted(pdir.rglob("*.xaml"))
+            all_errors = []
+            all_warnings = []
+            for xf in xamls:
+                rep = tool_validate_xaml(str(xf))
+                for line in rep.splitlines():
+                    s = line.strip()
+                    if s.startswith("ERROR:"):
+                        all_errors.append(f"{xf.name}: {s[6:].strip()}")
+                    elif s.startswith("WARN:"):
+                        all_warnings.append(f"{xf.name}: {s[5:].strip()}")
+            local_content = pdir / ".local" / "content"
+            local_content.mkdir(parents=True, exist_ok=True)
+            (local_content / "entry-points.json").write_text(
+                json.dumps({"entryPoints": [{"filePath": "Main.xaml"}]}, indent=2),
+                encoding="utf-8",
+            )
+            (local_content / "bindings_v2.json").write_text(
+                json.dumps({"version": "2.0", "resources": []}, indent=2),
+                encoding="utf-8",
+            )
+            if all_errors:
+                return json.dumps({
+                    "Result": "Failure",
+                    "Code": "BuildFailed",
+                    "Data": {
+                        "projectDir": str(pdir),
+                        "message": "; ".join(all_errors),
+                        "errors": all_errors,
+                        "warnings": all_warnings,
+                    },
+                })
+            return json.dumps({
+                "Result": "Success",
+                "Code": "Build",
+                "Data": {
+                    "projectDir": str(pdir),
+                    "filesValidated": len(xamls),
+                    "errors": [],
+                    "warnings": all_warnings,
+                    "message": f"Build succeeded ({len(xamls)} workflow(s) validated, 0 errors).",
+                },
+            })
+
+        if (action == "activities" and sub_2 == "find") or action == "find-activities":
+            query = _parse_flag(sub, "--query", "-q", default="").lower()
+            if not query and len(sub) >= 2 and not sub[-1].startswith("-"):
+                query = sub[-1].lower()
+            matches = []
+            for cls_name, info in DEFAULT_XAML_SNIPPETS.items():
+                if not query or query in cls_name.lower() or query in info["packageId"].lower():
+                    matches.append({
+                        "className": cls_name,
+                        "displayName": cls_name,
+                        "packageId": info["packageId"],
+                        "xmlns": info["xmlns"],
+                        "isTrigger": False,
+                        "triggerType": None,
+                    })
+            docs_root = SCRIPT_DIR / "skills" / "uipath-rpa" / "references" / "activity-docs"
+            if docs_root.is_dir():
+                for md_file in sorted(docs_root.rglob("activities/*.md")):
+                    act_name = md_file.stem
+                    if not query or query in act_name.lower():
+                        pkg_id = md_file.parents[2].name
+                        if not any(m["className"] == act_name for m in matches):
+                            matches.append({
+                                "className": act_name,
+                                "displayName": act_name,
+                                "packageId": pkg_id,
+                                "docPath": str(md_file.relative_to(SCRIPT_DIR / "skills" / "uipath-rpa")),
+                                "isTrigger": "Trigger" in act_name,
+                                "triggerType": "integration" if "IntegrationService" in pkg_id else ("local" if "Trigger" in act_name else None),
+                            })
+            return json.dumps({
+                "Result": "Success",
+                "Code": "ActivitiesFind",
+                "Data": {"query": query, "count": len(matches), "activities": matches[:30]},
+            })
+
+        if (action == "activities" and sub_2 == "get-default-xaml") or action == "type-definition":
+            cls_name = _parse_flag(sub, "--activity-class-name", "--type", "-t", default="LogMessage")
+            short_cls = cls_name.split(".")[-1].split(":")[-1]
+            info = DEFAULT_XAML_SNIPPETS.get(short_cls)
+            if not info:
+                is_uia = short_cls.startswith("N")
+                ns = 'xmlns:uix="http://schemas.uipath.com/workflow/activities/uix"' if is_uia else 'xmlns:ui="http://schemas.uipath.com/workflow/activities"'
+                prefix = "uix" if is_uia else "ui"
+                info = {
+                    "packageId": "UiPath.UIAutomation.Activities" if is_uia else "UiPath.System.Activities",
+                    "xmlns": ns,
+                    "defaultXaml": f'<{prefix}:{short_cls} DisplayName="{short_cls}" sap2010:WorkflowViewState.IdRef="{short_cls}_1" />',
+                }
+            return json.dumps({
+                "Result": "Success",
+                "Code": "GetDefaultXaml",
+                "Data": {
+                    "className": short_cls,
+                    "packageId": info["packageId"],
+                    "xmlns": info["xmlns"],
+                    "defaultXaml": info["defaultXaml"],
+                },
+            })
+
+        if action == "packages" and sub_2 == "versions":
+            pkg_id = _parse_flag(sub, "--package-id", "-p", default="UiPath.System.Activities")
+            versions = ["26.10.0-preview", "25.12.2", "25.10.2", "24.10.6"]
+            pkg_dir = SCRIPT_DIR / "skills" / "uipath-rpa" / "references" / "activity-docs" / pkg_id
+            if pkg_dir.is_dir():
+                for vd in sorted(pkg_dir.iterdir(), reverse=True):
+                    if vd.is_dir() and vd.name not in versions:
+                        versions.insert(0, vd.name)
+            return json.dumps({
+                "Result": "Success",
+                "Code": "PackageVersions",
+                "Data": {"packageId": pkg_id, "versions": versions},
+            })
+
+        if action == "packages" and sub_2 == "install":
+            pkg_spec = _parse_flag(sub, "--packages", default="")
+            proj_arg = _parse_flag(sub, "--project-dir", default=str(WORKSPACE))
+            pdir = safe_path(proj_arg)
+            pjson_path = pdir / "project.json"
+            installed = []
+            if pjson_path.is_file():
+                try:
+                    pdata = json.loads(pjson_path.read_text(encoding="utf-8"))
+                except Exception:
+                    pdata = {"dependencies": {}}
+            else:
+                pdata = {"dependencies": {}}
+            deps = pdata.setdefault("dependencies", {})
+            m_id = re.search(r"id=([^,\s'\"]+)", pkg_spec)
+            m_ver = re.search(r"version=([^,\s'\"]+)", pkg_spec)
+            if m_id:
+                pid = m_id.group(1)
+                pver = m_ver.group(1) if m_ver else "25.10.2"
+                deps[pid] = f"[{pver}]"
+                installed.append({"id": pid, "version": pver})
+            if pjson_path.is_file():
+                pjson_path.write_text(json.dumps(pdata, indent=2), encoding="utf-8")
+            return json.dumps({
+                "Result": "Success",
+                "Code": "PackagesInstall",
+                "Data": {"installed": installed, "projectDir": str(pdir)},
+            })
+
+        if action == "templates" and sub_2 == "search":
+            q = _parse_flag(sub, "--query", default="").lower()
+            templates = [
+                {"id": "blank-process", "name": "Blank Process", "source": "Official", "description": "Standard modern XAML process"},
+                {"id": "reframework", "name": "Robotic Enterprise Framework (REFramework)", "source": "Official", "description": "Transactional state-machine template with Init, GetTransactionData, Process, EndProcess"},
+                {"id": "transactional-process", "name": "Transactional Process", "source": "Official", "description": "Flowchart transactional process"},
+            ]
+            return json.dumps({
+                "Result": "Success",
+                "Code": "TemplatesSearch",
+                "Data": {"query": q, "templates": templates},
+            })
+
+        if action == "get-object-repository":
+            return json.dumps({
+                "Result": "Success",
+                "Code": "GetObjectRepository",
+                "Data": {"applications": [], "note": "Offline PCA mode: use inline TargetAnchorable selectors or inspect_ui_tree."},
+            })
+
+        if action == "analyzer-rules" and sub_2 == "list":
+            return json.dumps({
+                "Result": "Success",
+                "Code": "AnalyzerRulesList",
+                "Data": {
+                    "rules": [
+                        {"id": "ST-NMG-002", "severity": "Warning", "description": "Prefix arguments with in_, out_, or io_"},
+                        {"id": "ST-SEC-007", "severity": "Error", "description": "Keep secrets inside scope using Get Credential/Secret"},
+                        {"id": "ST-USG-010", "severity": "Warning", "description": "Avoid hardcoded Delay; prefer NCheckAppState"},
+                        {"id": "UI-ANA-001", "severity": "Warning", "description": "Avoid volatile idx >= 2 in selectors"},
+                    ]
+                },
+            })
+
+        if action == "uia":
+            win_title = _parse_flag(sub, "--window-title", "--title", default="")
+            tree_out = tool_inspect_ui_tree(win_title, 3)
+            return json.dumps({
+                "Result": "Success",
+                "Code": "UiaInspect",
+                "Data": {"windowTitle": win_title, "uiTree": tree_out},
+            })
+
+    return json.dumps({
+        "Result": "Success",
+        "Code": "EmulatedCommand",
+        "Data": {"command": raw_cmd, "message": "Executed in PCA offline uip emulator."},
+    })
+
+
+def _is_uip_invocation(seg: str) -> bool:
+    s = seg.strip()
+    return bool(re.match(r"^(?:uip(?:\.exe|\.cmd)?|\./uip\.cmd)\b", s))
+
+
 def tool_run_command(command: str) -> str:
     if not command:
         return "Error: command is required."
     if not confirm_action("Execute Shell Command", f"  $ {command}"):
         return f"User declined executing command: {command}"
+
+    import shutil
+    has_system_uip = bool(shutil.which("uip")) and os.environ.get("PCA_FORCE_BUILTIN_UIP") != "1"
+    segments = [s.strip() for s in command.split("&&") if s.strip()]
+    if segments and any(_is_uip_invocation(s) for s in segments) and not has_system_uip:
+        outputs = []
+        exit_code = 0
+        for seg in segments:
+            if _is_uip_invocation(seg):
+                res_json = native_uip_command(seg)
+                outputs.append(res_json)
+                if '"Result": "Failure"' in res_json:
+                    exit_code = 1
+            else:
+                proc = subprocess.run(
+                    seg, shell=True, cwd=str(WORKSPACE),
+                    capture_output=True, text=True, timeout=30
+                )
+                out_piece = f"{proc.stdout.strip()}\n{proc.stderr.strip()}".strip()
+                if out_piece:
+                    outputs.append(out_piece)
+                if proc.returncode != 0:
+                    exit_code = proc.returncode
+                    break
+        combined = f"ExitCode: {exit_code}\n" + "\n".join(outputs)
+        if len(combined) > 3500:
+            combined = combined[:3500] + "\n... [Output truncated to save tokens]"
+        return combined.strip()
+
     try:
         proc = subprocess.run(
             command, shell=True, cwd=str(WORKSPACE),
@@ -1135,9 +1676,15 @@ def load_config_and_args(argv):
     i = 0
     while i < len(argv):
         a = argv[i]
-        if a in ("-h", "--help", "-Help"):
+        if a in ("--uip", "-Uip"):
+            SESSION.auto_approve = True
+            uip_cmd = "uip " + " ".join(shlex.quote(x) for x in argv[i + 1:])
+            out_json = native_uip_command(uip_cmd)
+            print(out_json)
+            sys.exit(1 if '"Result": "Failure"' in out_json else 0)
+        elif a in ("-h", "--help", "-Help"):
             print("Usage: pca [options] [prompt]")
-            print("Options: --test-endpoints [provider|url], --provider <name>, --model <name>, --tier <cheap|smart|opus>, --skill <name>, --api-key <key>, --base-url <url>, --auto-approve, --list-providers")
+            print("Options: --test-endpoints [provider|url], --uip <uip-args...>, --provider <name>, --model <name>, --tier <cheap|smart|opus>, --skill <name>, --api-key <key>, --base-url <url>, --auto-approve, --list-providers")
             show_providers()
             sys.exit(0)
         elif a in ("--list-providers", "-ListProviders"):
@@ -1193,7 +1740,7 @@ def load_config_and_args(argv):
         try:
             raw_proj = uipath_proj.read_text(encoding="utf-8", errors="ignore")
             if "UiPath" in raw_proj or "expressionLanguage" in raw_proj:
-                for auto_sk in ("uipath", "uipath-desktop"):
+                for auto_sk in ("uipath", "uipath-rpa", "uipath-desktop"):
                     if auto_sk not in SESSION.active_skills:
                         SESSION.active_skills.append(auto_sk)
         except OSError:
@@ -1250,7 +1797,7 @@ def main():
             if cmd in ("/exit", "/quit"):
                 break
             elif cmd == "/help":
-                print("  Commands: /test [prov|url], /uipath [plan|review|full], /provider [name], /model [name], /tier [cheap|smart|opus], /skill [name|off], /add <file>, /drop, /files, /undo, /compact, /cost, /clear, /exit")
+                print("  Commands: /test [prov|url], /uipath [plan|review|troubleshoot|migrate|full], /provider [name], /model [name], /tier [cheap|smart|opus], /skill [name|off], /add <file>, /drop, /files, /undo, /compact, /cost, /clear, /exit")
             elif cmd == "/test":
                 run_endpoint_tests(arg)
             elif cmd == "/uipath":
@@ -1259,22 +1806,32 @@ def main():
                     SESSION.active_skills.clear()
                     print("  Cleared all active skills.")
                 elif sub == "plan":
-                    for s in ("uipath", "uipath-desktop", "uipath-planner"):
+                    for s in ("uipath", "uipath-rpa", "uipath-desktop", "uipath-planner"):
                         if s not in SESSION.active_skills:
                             SESSION.active_skills.append(s)
                     print(f"  Activated UiPath Planner mode: {', '.join(SESSION.active_skills)}")
                 elif sub == "review":
-                    for s in ("uipath", "uipath-desktop", "uipath-review"):
+                    for s in ("uipath", "uipath-rpa", "uipath-desktop", "uipath-review"):
                         if s not in SESSION.active_skills:
                             SESSION.active_skills.append(s)
                     print(f"  Activated UiPath Reviewer mode: {', '.join(SESSION.active_skills)}")
+                elif sub == "troubleshoot":
+                    for s in ("uipath", "uipath-rpa", "uipath-desktop", "uipath-troubleshoot"):
+                        if s not in SESSION.active_skills:
+                            SESSION.active_skills.append(s)
+                    print(f"  Activated UiPath Troubleshoot mode: {', '.join(SESSION.active_skills)}")
+                elif sub == "migrate":
+                    for s in ("uipath", "uipath-rpa", "uipath-desktop", "uipath-activity-migrator"):
+                        if s not in SESSION.active_skills:
+                            SESSION.active_skills.append(s)
+                    print(f"  Activated UiPath Activity Migrator mode: {', '.join(SESSION.active_skills)}")
                 elif sub in ("full", "all"):
-                    for s in ("uipath", "uipath-desktop", "uipath-planner", "uipath-review"):
+                    for s in ("uipath", "uipath-rpa", "uipath-desktop", "uipath-planner", "uipath-review", "uipath-troubleshoot", "uipath-activity-migrator"):
                         if s not in SESSION.active_skills:
                             SESSION.active_skills.append(s)
                     print(f"  Activated full UiPath XAML & Desktop Automation suite: {', '.join(SESSION.active_skills)}")
                 else:
-                    for s in ("uipath", "uipath-desktop"):
+                    for s in ("uipath", "uipath-rpa", "uipath-desktop"):
                         if s not in SESSION.active_skills:
                             SESSION.active_skills.append(s)
                     print(f"  Activated UiPath XAML & Desktop Automation mode: {', '.join(SESSION.active_skills)}")
